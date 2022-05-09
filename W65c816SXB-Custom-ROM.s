@@ -1,4 +1,11 @@
-; Disassembly of W65816SXB SBC monitor ROM.
+; Customized W65C02SXB ROM image, with the following goals:
+;
+;       1) Move all ROM code to the last flash page, leaving the rest
+;          of the flash available for use by the user application.
+;       2) Reduce RAM usage.
+;       3) Eliminate dead code in the monitor.
+;       4) Support automatically executing a user's image in FLASH.
+;
 ; Alicie, 2022, based on original work by "Keith".
 
         .setcpu "65816"
@@ -116,13 +123,8 @@ RAM_ZP_SAVE:                    .res 5
 ; Flag variable at $7E19 of unknown use. It only ever gets set to 0.
 RAM_VAR_7E19:                   .res 1
 
-; Variable at $7E1A of unknown use. It gets set to 0, and apparently not used.
-RAM_VAR_7E1A:                   .res 2
-
 ; Save-area in work-RAM for the system VIA's registers.
 RAM_PCR_SAVE:                   .res 1
-RAM_DDRB_SAVE:                  .res 1
-RAM_DDRA_SAVE:                  .res 1
 
         .segment "RAW_VECTORS"
 
@@ -135,6 +137,9 @@ BRK_816_ENTRY_VECTOR:           .res 2
 NMI_816_ENTRY_VECTOR:           .res 2
 
         .segment "SHADOW_VECTORS"
+; Although there are several unused vectors here, they should probably be
+; left alone, since the debugger might expect the shadow vectors to be
+; laid out in a certain way and at certain offsets.
 
 ; Shadow vectors for 816 mode, which the user may set to hook the vector.
 SHADOW_VEC_COP_816:             .res 2
@@ -188,7 +193,7 @@ Signature_String:
         .byte   $82,"$",$01,$FF
 
 Monitor_Version_String:
-        .asciiz   "WDC65c816SK WDCMON Version =  2.0.4.3Version Date = Wed Mar 26 2014  2:46"
+        .asciiz   "WDC65c816SXB Custom ROM, v1.0, ts=", .sprintf("%d", .time)
 
         .segment "POINTER_TABLE"
 
@@ -219,25 +224,21 @@ Pointer_Table:
 ; are shared in this mode, so jump to monitor code which checks for BRK.
 IRQ_02_entry:
         jmp     (IRQ_02_ENTRY_VECTOR)
-        NOP
 
 ; Called directly from FLASH vector on NMI in emulation mode. Jump to monitor
 ; code to break into the debugger.
 NMI_02_entry:
         jmp     (NMI_02_ENTRY_VECTOR)
-        NOP
 
 ; Called directly from FLASH vector on BRK in 816 mode. Jump to monitor
 ; code to break into the debugger.
 BRK_816_entry:
         jmp     (BRK_816_ENTRY_VECTOR)
-        NOP
 
 ; Called directly from FLASH vector on NMI in 816 mode. Jump to monitor
 ; code to break into the debugger.
 NMI_816_entry:
         jmp     (NMI_816_ENTRY_VECTOR)
-        NOP
 
 ; Called directly from FLASH vector on COP in emulation mode. Call the
 ; user's handler through the shadow vector.
@@ -266,14 +267,8 @@ COP_816_entry:
 ; Does nothing forever. Called directly from several reserved vectors, and
 ; is also the default handler for all shadow vectors.
 Infinite_Loop:
-        jsr     Do_Nothing_Subroutine_3
+        jsr     Do_Nothing_Subroutine
         BRA     Infinite_Loop
-
-; Does nothing forever. Called directly from a reserved vector.
-Infinite_Loop_2:
-        SEP     #$20    ; Set A to 8-bit. The assembler is already in 8-bit mode.
-        jsr     Do_Nothing_Subroutine_3
-        BRA     Infinite_Loop_2
 
 ; Called directly from FLASH vector on RESET. Always executed in emulation mode.
 RESET_entry:
@@ -321,8 +316,7 @@ Continue_System_Init:
         SEI
         CLD
 
-        ; Zero a couple of variables whose use is currently unknown.
-        stz     RAM_VAR_7E1A
+        ; Zero a variable whose use is currently unknown.
         STZ     RAM_VAR_7E19
 
         ; Switch to native mode.
@@ -592,7 +586,7 @@ Dbg_Cmd_1_Seq_Test:
 
         ; If the sequence is not correct, enter an infinite loop.
 @infinite_loop:
-        jsr     Do_Nothing_Subroutine_2
+        jsr     Do_Nothing_Subroutine
         BRA     @infinite_loop
         
 @continue:
@@ -1031,20 +1025,6 @@ Dbg_Cmd_7_No_Op:
         ; Return, making this debug command a no-op.
         rts
 
-        ; This code is apparently never called.
-        jmp     Sys_VIA_USB_Char_TX
-        lda     #$25
-        bra     Dbg_Cmd_8_Done
-        PLD
-        stx     $A9
-        bra     @branch
-@branch:
-        JSR     Sys_VIA_USB_Char_TX
-        ; See notes for Dbg_Cmd_8_BRK about 8-bit LDA and BRK vs. 16-bit LDA.
-        LDA     #$00
-        BRK     ; Single-byte BRK instruction.
-        jmp     Sys_VIA_USB_Char_TX
-
 ; Debugger command 8. Executes a BRK instruction, causing the monitor to send
 ; a $02 to the debugger, as it normally does when a BRK is executed. Not sure why
 ; this debugger command exists, or how/if it is useful at all.
@@ -1167,57 +1147,6 @@ NMI_02_Entry_Vector_Default:
 ;
 ; On entry, A must contain the reason the monitor will be entered.
 Save_Context_Enter_Monitor_02_Mode:
-
-        ; Enter native mode.
-        BRA     @enter_native_mode
-
-        ; The above is not a subroutine call, so it does not return.
-        ; I don't think the following code is ever executed. Instead,
-        ; the BRA above switches the CPU into native mode, and then
-        ; the native-mode routine is called to save the CPU context.
-
-        ; Save the reason we're entering the monitor into work-RAM.
-        STA     RAM_ENTER_MONITOR_REASON
-
-        ; Save the 8-bit CPU context into work-RAM.
-        pla
-        sta     RAM_A_SAVE
-        stx     RAM_X_SAVE
-        sty     RAM_Y_SAVE
-        pla
-        sta     RAM_P_SAVE
-        pla
-        sta     RAM_PC_SAVE
-        pla
-        STA     RAM_PC_SAVE+1
-
-        ; We were in 6502 mode, so save 0 to the bank registers and
-        ; the high bytes of the 16-bit registers.
-        stz     RAM_PB_SAVE
-        stz     RAM_DB_SAVE
-        stz     RAM_DP_SAVE
-        stz     RAM_DP_SAVE+1
-        stz     RAM_A_SAVE+1
-        stz     RAM_X_SAVE+1
-        STZ     RAM_Y_SAVE+1
-
-        ; Save the LSB (8-bits) of the stack to work-RAM.
-        tsx
-        STX     RAM_SP_SAVE
-
-        ; We know we're in emulation mode, so save "1" to the high-byte
-        ; of the stack pointer and the E(mulation) flag save area.
-        lda     #$01
-        sta     RAM_SP_SAVE+1
-        STA     RAM_E_SAVE
-
-        ; Per the comments above, I don't think this is ever actually
-        ; called from here. Another reason is that the subroutine expects
-        ; the CPU to be in emulation mode, and if this code were to be
-        ; executed, it would be in we're in native mode now.
-        JMP     Send_Enter_Reason_and_Sync_With_Debugger
-
-@enter_native_mode:
         ; Switch to native mode.
         CLC
         XCE
@@ -1420,15 +1349,9 @@ Initialize_System_VIA:
         lda     #$1C
         STA     SYSTEM_VIA_DDRB
 
-        ; Save DDRB in work-RAM. Not sure why, since it is never used again.
-        STA     RAM_DDRB_SAVE
-
         ; Set all IO on port A to inputs.
         LDA     #$00
         STA     SYSTEM_VIA_DDRA
-
-        ; Save DDRA in work-RAM. Not sure why, since it is never used again.
-        STA     RAM_DDRA_SAVE
 
         ; Read port B (USB status and control lines) and save it on the stack.
         lda     SYSTEM_VIA_IOB
@@ -1457,7 +1380,7 @@ Initialize_System_VIA:
         ; If PB6 (not connected) is 0, then make a no-op call. Why?!?
         LDA     SYSTEM_VIA_IOB
         and     #$40
-        BEQ     Do_Nothing_Subroutine_1
+        BEQ     Do_Nothing_Subroutine
 
         ; All done.
         RTS
@@ -1583,7 +1506,7 @@ Sys_VIA_USB_Char_TX:
         rts
 
 ; A subroutine which does absolutely nothing.
-Do_Nothing_Subroutine_1:
+Do_Nothing_Subroutine:
         rts
 
 ; Delays by looping 256*X times.
@@ -1614,17 +1537,6 @@ Restore_VIA_PCR_State:
         sta     SYSTEM_VIA_PCR
         rts
 
-; The second subroutine which does absolutely nothing.
-Do_Nothing_Subroutine_2:
-        rts
-
-; The third subroutine which does absolutely nothing.
-Do_Nothing_Subroutine_3:
-        rts
-        rts
-        rts
-        RTS
-
         .segment "CPU_VECTORS"
 
         ; 65816 Native-Mode Vectors
@@ -1632,7 +1544,7 @@ COP_816:    .addr   COP_816_entry       ; $FFE4
 BRK_816:    .addr   BRK_816_entry       ; $FFE6
 ABORT_816:  .addr   ABORT_816_entry     ; $FFE8
 NMI_816:    .addr   NMI_816_entry       ; $FFEA
-RSVD_FFEC:  .addr   Infinite_Loop_2     ; $FFEC
+RSVD_FFEC:  .addr   Infinite_Loop       ; $FFEC
 IRQ_816:    .addr   IRQ_816_entry       ; $FFEE
 
         ; 65C02 Emulation-Mode Vectors
