@@ -1,3 +1,5 @@
+; Alicie, 2022, based on original work by "Keith".
+;
 ; Customized W65C02SXB ROM image, with the following goals:
 ;
 ;       1) Move all ROM code to the last flash page, leaving the rest
@@ -6,7 +8,24 @@
 ;       3) Eliminate dead code in the monitor.
 ;       4) Support automatically executing a user's image in FLASH.
 ;
-; Alicie, 2022, based on original work by "Keith".
+; If the first three bytes of the user's application area in flash,
+; $8000-$8002, are "WDC", then the user's application is automatically
+; executed by jumping to address $8003. Upon executing the user's code,
+; the following conditions apply:
+;
+;       * The CPU is in '02' emulation mode.
+;       * Interrupts are disabled.
+;       * Decimal mode is cleared.
+;       * All register contents are indeterminate, including SP.
+;       * The raw vectors are initialized to their default values.
+;       * The USB VIA is initialized for use with the debugger.
+;       * If the CPU had been running prior to being reset, then:
+;           * The CPU context is saved in the save area in work RAM.
+;           * The shadow vectors are left as they were prior to the reset.
+;
+; Assuming that the user application does not overwrite the default NMI
+; raw vector, then the NMI button can be used to break the user's app
+; and enter the debugging monitor.
 
         .setcpu "65816"
 
@@ -30,6 +49,7 @@
         .import __WORK_RAM_LOAD__
         .import __SHADOW_VECTORS_LOAD__
         .import __SHADOW_VECTORS_SIZE__
+        .import __USR_ROM_START__
         .import __MONITOR_HEADER_LOAD__
         .import __CPU_VECTORS_LOAD__
 
@@ -185,7 +205,9 @@ SYSTEM_VIA_PCR          := __VIA_USB_ADDR__ + $0C ; Peripheral control register
         ; The monitor should begin with a header which includes a signature and version.
         .segment "MONITOR_HEADER"
 
-        ; A Western Design Center mark at the beginning of the header.
+        ; A Western Design Center mark at the beginning of the header. This is also used
+        ; when checking to see whether to auto-exec a user's application in ROM.
+WDC_Signature:
         .byte   "WDC"
         .BYTE   $FF
 
@@ -217,8 +239,8 @@ Pointer_Table:
         .addr   BRK_816_Entry_Vector_Default
         .addr   NMI_816_Entry_Vector_Default
 
-        ; This is the start of the actual monitor code, placed in the code section.
-        .code
+        ; This is the start of the actual monitor code.
+        .segment "MON_CODE"
 
 ; Called directly from FLASH vector on IRQ in emulation mode. IRQ and BRK
 ; are shared in this mode, so jump to monitor code which checks for BRK.
@@ -275,8 +297,35 @@ RESET_entry:
         ; Save the CPU context, init vectors, and switch into emulation mode.
         JSR     Initialize_Upon_Reset
 
+        ; Execute the user's application if the signature is present.
+        jsr     Check_AutoExec_Usr_App
+
         ; Save a copy of ZP memory, and sync up with the debugger.
         jmp     Save_ZP_Sync_With_Debugger
+
+; Checks the beginning of flash for "WDC", and jumps to the following instruction
+; if present. This code must be called in emulation mode.
+Check_AutoExec_Usr_App:
+
+        ; Check to see if the user's area in ROM starts with "WDC".
+        ldx     #$02
+@loop:
+        lda     WDC_Signature,x
+        cmp     __USR_ROM_START__,x
+        bne     @done
+        dex
+        bpl     @loop
+
+        ; We're no longer in the ROM monitor since we're going to execute user
+        ; code. This is critical to allow NMI to break into the debug monitor.
+        lda     #$00
+        STA     RAM_IN_MONITOR
+
+        ; The signature matches, so jump to the user's application.
+        jmp     __USR_ROM_START__ + 3
+
+@done:
+        rts
 
 ; Called in emulation mode when the CPU is reset.
 Initialize_Upon_Reset:
@@ -614,11 +663,11 @@ Dbg_Cmd_2_Write_Mem:
 
         ; Read the 24-bit starting address, LSB-first.
         jsr     Sys_VIA_USB_Char_RX
-        sta     a:DBG_VAR_00	; 16-bit addr LSB
+        sta     a:DBG_VAR_00    ; 16-bit addr LSB
         jsr     Sys_VIA_USB_Char_RX
-        sta     a:DBG_VAR_01	; 16-bit addr MSB
+        sta     a:DBG_VAR_01    ; 16-bit addr MSB
         jsr     Sys_VIA_USB_Char_RX
-        STA     a:DBG_VAR_02	; bank
+        STA     a:DBG_VAR_02    ; bank
 
         ; Branch if bank is > $00.
         lda     #$00

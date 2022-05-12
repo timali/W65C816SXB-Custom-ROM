@@ -1,0 +1,166 @@
+Modules list:
+-------------
+W65c816SXB-Custom-ROM.o:
+    CODE              Offs=000000  Size=000000  Align=00001  Fill=0000
+    RODATA            Offs=000000  Size=000000  Align=00001  Fill=0000
+    BSS               Offs=000000  Size=000000  Align=00001  Fill=0000
+    DATA              Offs=000000  Size=000000  Align=00001  Fill=0000
+    ZEROPAGE          Offs=000000  Size=000005  Align=00001  Fill=0000
+    NULL              Offs=000000  Size=000000  Align=00001  Fill=0000
+    WORK_RAM          Offs=000000  Size=00001B  Align=00001  Fill=0000
+    RAW_VECTORS       Offs=000000  Size=000008  Align=00001  Fill=0000
+    SHADOW_VECTORS    Offs=000000  Size=00001C  Align=00001  Fill=0000
+    VIA_USB           Offs=000000  Size=000000  Align=00001  Fill=0000
+    MONITOR_HEADER    Offs=000000  Size=000035  Align=00001  Fill=0000
+    POINTER_TABLE     Offs=000000  Size=000018  Align=00001  Fill=0000
+    MON_CODE          Offs=000000  Size=000523  Align=00001  Fill=0000
+    CPU_VECTORS       Offs=000000  Size=00001C  Align=00001  Fill=0000
+
+
+Segment list:
+-------------
+Name                   Start     End    Size  Align
+----------------------------------------------------
+BSS                   000000  000000  000000  00001
+CODE                  000000  000000  000000  00001
+DATA                  000000  000000  000000  00001
+NULL                  000000  000000  000000  00001
+RODATA                000000  000000  000000  00001
+VIA_USB               000000  000000  000000  00001
+ZEROPAGE              000000  000004  000005  00001
+WORK_RAM              007EC0  007EDA  00001B  00001
+RAW_VECTORS           007EDC  007EE3  000008  00001
+SHADOW_VECTORS        007EE4  007EFF  00001C  00001
+MONITOR_HEADER        00F000  00F034  000035  00001
+POINTER_TABLE         00F080  00F097  000018  00001
+MON_CODE              00F100  00F622  000523  00001
+CPU_VECTORS           00FFE4  00FFFF  00001C  00001
+
+
+Exports list by name:
+---------------------
+BRK_816_ENTRY_VECTOR      007EE0  LA    IRQ_02_ENTRY_VECTOR       007EDC  LA    
+NMI_02_ENTRY_VECTOR       007EDE  LA    NMI_816_ENTRY_VECTOR      007EE2  LA    
+Pointer_Table             00F080  LA    RAM_A_SAVE                007EC0  LA    
+RAM_CPU_TYPE              007ED0  LA    RAM_DB_SAVE               007ECF  LA    
+RAM_DP_SAVE               007EC8  LA    RAM_E_SAVE                007ECD  LA    
+RAM_IN_MONITOR            007ED1  LA    RAM_PB_SAVE               007ECE  LA    
+RAM_PC_SAVE               007EC6  LA    RAM_P_SAVE                007ECC  LA    
+RAM_SP_SAVE               007ECA  LA    RAM_X_SAVE                007EC2  LA    
+RAM_Y_SAVE                007EC4  LA    RAM_ZP_SAVE               007ED4  LA    
+RESET_entry               00F120  LA    SHADOW_VEC_ABORT_02       007EF8  LA    
+SHADOW_VEC_ABORT_816      007EE8  LA    SHADOW_VEC_COP_02         007EF4  LA    
+SHADOW_VEC_COP_816        007EE4  LA    SHADOW_VEC_IRQ_02         007EFE  LA    
+SHADOW_VEC_IRQ_816        007EEE  LA    __ACIA_ADDR__             007F80  EA    
+__CPU_VECTORS_LOAD__      00FFE4 RLA    __CPU_VECTORS_RUN__       00FFE4  LA    
+__CPU_VECTORS_SIZE__      00001C  EA    __HW_BRK_ADDR__           FFFFFF REA    
+__HW_IO_ADDR__            007F00 REA    __HW_IO_SIZE__            000100 REA    
+__MONITOR_HEADER_LOAD__   00F000 RLA    __MONITOR_HEADER_RUN__    00F000  LA    
+__MONITOR_HEADER_SIZE__   000035  EA    __PIA_AADR__              007FA0  EA    
+__SHADOW_VECTORS_LOAD__   007EE4 RLA    __SHADOW_VECTORS_RUN__    007EE4  LA    
+__SHADOW_VECTORS_SIZE__   00001C REA    __USR_ROM_FILEOFFS__      000000  EA    
+__USR_ROM_LAST__          008000  LA    __USR_ROM_SIZE__          007000  EA    
+__USR_ROM_START__         008000 RLA    __VIA_USB_ADDR__          007FE0 REA    
+__VIA_USR_ADDR__          007FC0  EA    __WORK_RAM_LOAD__         007EC0 RLA    
+__WORK_RAM_RUN__          007EC0  LA    __WORK_RAM_SIZE__         00001B  EA    
+__XCS0_ADDR__             007F00  EA    __XCS1_ADDR__             007F20  EA    
+__XCS2_ADDR__             007F40  EA    __XCS3_ADDR__             007F60  EA    
+
+
+
+Exports list by value:
+----------------------
+__USR_ROM_FILEOFFS__      000000  EA    __WORK_RAM_SIZE__         00001B  EA    
+__SHADOW_VECTORS_SIZE__   00001C REA    __CPU_VECTORS_SIZE__      00001C  EA    
+__MONITOR_HEADER_SIZE__   000035  EA    __HW_IO_SIZE__            000100 REA    
+__USR_ROM_SIZE__          007000  EA    __WORK_RAM_LOAD__         007EC0 RLA    
+__WORK_RAM_RUN__          007EC0  LA    RAM_A_SAVE                007EC0  LA    
+RAM_X_SAVE                007EC2  LA    RAM_Y_SAVE                007EC4  LA    
+RAM_PC_SAVE               007EC6  LA    RAM_DP_SAVE               007EC8  LA    
+RAM_SP_SAVE               007ECA  LA    RAM_P_SAVE                007ECC  LA    
+RAM_E_SAVE                007ECD  LA    RAM_PB_SAVE               007ECE  LA    
+RAM_DB_SAVE               007ECF  LA    RAM_CPU_TYPE              007ED0  LA    
+RAM_IN_MONITOR            007ED1  LA    RAM_ZP_SAVE               007ED4  LA    
+IRQ_02_ENTRY_VECTOR       007EDC  LA    NMI_02_ENTRY_VECTOR       007EDE  LA    
+BRK_816_ENTRY_VECTOR      007EE0  LA    NMI_816_ENTRY_VECTOR      007EE2  LA    
+__SHADOW_VECTORS_RUN__    007EE4  LA    __SHADOW_VECTORS_LOAD__   007EE4 RLA    
+SHADOW_VEC_COP_816        007EE4  LA    SHADOW_VEC_ABORT_816      007EE8  LA    
+SHADOW_VEC_IRQ_816        007EEE  LA    SHADOW_VEC_COP_02         007EF4  LA    
+SHADOW_VEC_ABORT_02       007EF8  LA    SHADOW_VEC_IRQ_02         007EFE  LA    
+__HW_IO_ADDR__            007F00 REA    __XCS0_ADDR__             007F00  EA    
+__XCS1_ADDR__             007F20  EA    __XCS2_ADDR__             007F40  EA    
+__XCS3_ADDR__             007F60  EA    __ACIA_ADDR__             007F80  EA    
+__PIA_AADR__              007FA0  EA    __VIA_USR_ADDR__          007FC0  EA    
+__VIA_USB_ADDR__          007FE0 REA    __USR_ROM_START__         008000 RLA    
+__USR_ROM_LAST__          008000  LA    __MONITOR_HEADER_LOAD__   00F000 RLA    
+__MONITOR_HEADER_RUN__    00F000  LA    Pointer_Table             00F080  LA    
+RESET_entry               00F120  LA    __CPU_VECTORS_LOAD__      00FFE4 RLA    
+__CPU_VECTORS_RUN__       00FFE4  LA    __HW_BRK_ADDR__           FFFFFF REA    
+
+
+
+Imports list:
+-------------
+BRK_816_ENTRY_VECTOR (W65c816SXB-Custom-ROM.o):
+IRQ_02_ENTRY_VECTOR (W65c816SXB-Custom-ROM.o):
+NMI_02_ENTRY_VECTOR (W65c816SXB-Custom-ROM.o):
+NMI_816_ENTRY_VECTOR (W65c816SXB-Custom-ROM.o):
+Pointer_Table (W65c816SXB-Custom-ROM.o):
+RAM_A_SAVE (W65c816SXB-Custom-ROM.o):
+RAM_CPU_TYPE (W65c816SXB-Custom-ROM.o):
+RAM_DB_SAVE (W65c816SXB-Custom-ROM.o):
+RAM_DP_SAVE (W65c816SXB-Custom-ROM.o):
+RAM_E_SAVE (W65c816SXB-Custom-ROM.o):
+RAM_IN_MONITOR (W65c816SXB-Custom-ROM.o):
+RAM_PB_SAVE (W65c816SXB-Custom-ROM.o):
+RAM_PC_SAVE (W65c816SXB-Custom-ROM.o):
+RAM_P_SAVE (W65c816SXB-Custom-ROM.o):
+RAM_SP_SAVE (W65c816SXB-Custom-ROM.o):
+RAM_X_SAVE (W65c816SXB-Custom-ROM.o):
+RAM_Y_SAVE (W65c816SXB-Custom-ROM.o):
+RAM_ZP_SAVE (W65c816SXB-Custom-ROM.o):
+RESET_entry (W65c816SXB-Custom-ROM.o):
+SHADOW_VEC_ABORT_02 (W65c816SXB-Custom-ROM.o):
+SHADOW_VEC_ABORT_816 (W65c816SXB-Custom-ROM.o):
+SHADOW_VEC_COP_02 (W65c816SXB-Custom-ROM.o):
+SHADOW_VEC_COP_816 (W65c816SXB-Custom-ROM.o):
+SHADOW_VEC_IRQ_02 (W65c816SXB-Custom-ROM.o):
+SHADOW_VEC_IRQ_816 (W65c816SXB-Custom-ROM.o):
+__ACIA_ADDR__ ([linker generated]):
+__CPU_VECTORS_LOAD__ ([linker generated]):
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:54
+__CPU_VECTORS_RUN__ ([linker generated]):
+__CPU_VECTORS_SIZE__ ([linker generated]):
+__HW_BRK_ADDR__ ([linker generated]):
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:48
+__HW_IO_ADDR__ ([linker generated]):
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:45
+__HW_IO_SIZE__ ([linker generated]):
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:46
+__MONITOR_HEADER_LOAD__ ([linker generated]):
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:53
+__MONITOR_HEADER_RUN__ ([linker generated]):
+__MONITOR_HEADER_SIZE__ ([linker generated]):
+__PIA_AADR__ ([linker generated]):
+__SHADOW_VECTORS_LOAD__ ([linker generated]):
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:50
+__SHADOW_VECTORS_RUN__ ([linker generated]):
+__SHADOW_VECTORS_SIZE__ ([linker generated]):
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:51
+__USR_ROM_FILEOFFS__ ([linker generated]):
+__USR_ROM_LAST__ ([linker generated]):
+__USR_ROM_SIZE__ ([linker generated]):
+__USR_ROM_START__ ([linker generated]):
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:52
+__VIA_USB_ADDR__ ([linker generated]):
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:47
+__VIA_USR_ADDR__ ([linker generated]):
+__WORK_RAM_LOAD__ ([linker generated]):
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:49
+__WORK_RAM_RUN__ ([linker generated]):
+__WORK_RAM_SIZE__ ([linker generated]):
+__XCS0_ADDR__ ([linker generated]):
+__XCS1_ADDR__ ([linker generated]):
+__XCS2_ADDR__ ([linker generated]):
+__XCS3_ADDR__ ([linker generated]):
+

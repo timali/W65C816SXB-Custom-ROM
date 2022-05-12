@@ -1,0 +1,61 @@
+Modules list:
+-------------
+X-LED-Flash.o:
+    CODE              Offs=000000  Size=000063  Align=00001  Fill=0000
+    RODATA            Offs=000000  Size=000000  Align=00001  Fill=0000
+    BSS               Offs=000000  Size=000000  Align=00001  Fill=0000
+    DATA              Offs=000000  Size=000000  Align=00001  Fill=0000
+    ZEROPAGE          Offs=000000  Size=000000  Align=00001  Fill=0000
+    NULL              Offs=000000  Size=000000  Align=00001  Fill=0000
+
+
+Segment list:
+-------------
+Name                   Start     End    Size  Align
+----------------------------------------------------
+BSS                   000000  000000  000000  00001
+NULL                  000000  000000  000000  00001
+RODATA                000000  000000  000000  00001
+ZEROPAGE              000000  000000  000000  00001
+DATA                  000200  000200  000000  00001
+CODE                  008000  008062  000063  00001
+
+
+Exports list by name:
+---------------------
+__ACIA_ADDR__             007F80  EA    __HW_BRK_ADDR__           FFFFFF  EA    
+__HW_IO_ADDR__            007F00  EA    __HW_IO_SIZE__            000100  EA    
+__PIA_AADR__              007FA0  EA    __VIA_USB_ADDR__          007FE0  EA    
+__VIA_USR_ADDR__          007FC0  EA    __XCS0_ADDR__             007F00 REA    
+__XCS1_ADDR__             007F20 REA    __XCS2_ADDR__             007F40 REA    
+__XCS3_ADDR__             007F60 REA    
+
+
+Exports list by value:
+----------------------
+__HW_IO_SIZE__            000100  EA    __HW_IO_ADDR__            007F00  EA    
+__XCS0_ADDR__             007F00 REA    __XCS1_ADDR__             007F20 REA    
+__XCS2_ADDR__             007F40 REA    __XCS3_ADDR__             007F60 REA    
+__ACIA_ADDR__             007F80  EA    __PIA_AADR__              007FA0  EA    
+__VIA_USR_ADDR__          007FC0  EA    __VIA_USB_ADDR__          007FE0  EA    
+__HW_BRK_ADDR__           FFFFFF  EA    
+
+
+Imports list:
+-------------
+__ACIA_ADDR__ ([linker generated]):
+__HW_BRK_ADDR__ ([linker generated]):
+__HW_IO_ADDR__ ([linker generated]):
+__HW_IO_SIZE__ ([linker generated]):
+__PIA_AADR__ ([linker generated]):
+__VIA_USB_ADDR__ ([linker generated]):
+__VIA_USR_ADDR__ ([linker generated]):
+__XCS0_ADDR__ ([linker generated]):
+    X-LED-Flash.o             X-LED-Flash.s:10
+__XCS1_ADDR__ ([linker generated]):
+    X-LED-Flash.o             X-LED-Flash.s:11
+__XCS2_ADDR__ ([linker generated]):
+    X-LED-Flash.o             X-LED-Flash.s:12
+__XCS3_ADDR__ ([linker generated]):
+    X-LED-Flash.o             X-LED-Flash.s:13
+

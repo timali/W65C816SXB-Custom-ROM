@@ -1,0 +1,1615 @@
+ca65 V2.19 - Git 451acb3
+Main file   : W65c816SXB-Custom-ROM.s
+Current file: W65c816SXB-Custom-ROM.s
+
+000000r 1               ; Alicie, 2022, based on original work by "Keith".
+000000r 1               ;
+000000r 1               ; Customized W65C02SXB ROM image, with the following goals:
+000000r 1               ;
+000000r 1               ;       1) Move all ROM code to the last flash page, leaving the rest
+000000r 1               ;          of the flash available for use by the user application.
+000000r 1               ;       2) Reduce RAM usage.
+000000r 1               ;       3) Eliminate dead code in the monitor.
+000000r 1               ;       4) Support automatically executing a user's image in FLASH.
+000000r 1               ;
+000000r 1               ; If the first three bytes of the user's application area in flash,
+000000r 1               ; $8000-$8002, are "WDC", then the user's application is automatically
+000000r 1               ; executed by jumping to address $8003. Upon executing the user's code,
+000000r 1               ; the following conditions apply:
+000000r 1               ;
+000000r 1               ;       * The CPU is in '02' emulation mode.
+000000r 1               ;       * Interrupts are disabled.
+000000r 1               ;       * Decimal mode is cleared.
+000000r 1               ;       * All register contents are indeterminate, including SP.
+000000r 1               ;       * The raw vectors are initialized to their default values.
+000000r 1               ;       * The USB VIA is initialized for use with the debugger.
+000000r 1               ;       * If the CPU had been running prior to being reset, then:
+000000r 1               ;           * The CPU context is saved in the save area in work RAM.
+000000r 1               ;           * The shadow vectors are left as they were prior to the reset.
+000000r 1               ;
+000000r 1               ; Assuming that the user application does not overwrite the default NMI
+000000r 1               ; raw vector, then the NMI button can be used to break the user's app
+000000r 1               ; and enter the debugging monitor.
+000000r 1               
+000000r 1                       .setcpu "65816"
+000000r 1               
+000000r 1               ; Most of the time, the monitor uses 8-bit A and XY registers, even in
+000000r 1               ; 65816 native mode. So to keep it simple, we'll only use .A16 or .I16
+000000r 1               ; when necessary, and we'll only use .A8 and .I8 in the places needed
+000000r 1               ; to restore the assembler back to 8-bit mode. So we'll not use a .A8
+000000r 1               ; or a .I8 every time there is a SEP -- only when it is actually needed.
+000000r 1               
+000000r 1               ; Zero-page variables that are temporarily used when executing commands
+000000r 1               ; from the debugger. When the monitor is entered, their values are saved
+000000r 1               ; into the ZP save area in work RAM (RAM_ZP_SAVE), and restored before
+000000r 1               ; control is returned to the user's program, so their use by the debugger
+000000r 1               ; and monitor is transparent to the user.
+000000r 1               
+000000r 1               ; Imports. These are all exported by the linker.
+000000r 1                       .import __HW_IO_ADDR__
+000000r 1                       .import __HW_IO_SIZE__
+000000r 1                       .import __VIA_USB_ADDR__
+000000r 1                       .import __HW_BRK_ADDR__
+000000r 1                       .import __WORK_RAM_LOAD__
+000000r 1                       .import __SHADOW_VECTORS_LOAD__
+000000r 1                       .import __SHADOW_VECTORS_SIZE__
+000000r 1                       .import __USR_ROM_START__
+000000r 1                       .import __MONITOR_HEADER_LOAD__
+000000r 1                       .import __CPU_VECTORS_LOAD__
+000000r 1               
+000000r 1               ; Export some useful symbols so they are shown in the map file.
+000000r 1                       .export RAM_A_SAVE
+000000r 1                       .export RAM_X_SAVE
+000000r 1                       .export RAM_Y_SAVE
+000000r 1                       .export RAM_PC_SAVE
+000000r 1                       .export RAM_DP_SAVE
+000000r 1                       .export RAM_SP_SAVE
+000000r 1                       .export RAM_P_SAVE
+000000r 1                       .export RAM_E_SAVE
+000000r 1                       .export RAM_PB_SAVE
+000000r 1                       .export RAM_DB_SAVE
+000000r 1                       .export RAM_CPU_TYPE
+000000r 1                       .export RAM_IN_MONITOR
+000000r 1                       .export RAM_ZP_SAVE
+000000r 1                       .export IRQ_02_ENTRY_VECTOR
+000000r 1                       .export NMI_02_ENTRY_VECTOR
+000000r 1                       .export BRK_816_ENTRY_VECTOR
+000000r 1                       .export NMI_816_ENTRY_VECTOR
+000000r 1                       .export SHADOW_VEC_COP_816
+000000r 1                       .export SHADOW_VEC_ABORT_816
+000000r 1                       .export SHADOW_VEC_IRQ_816
+000000r 1                       .export SHADOW_VEC_COP_02
+000000r 1                       .export SHADOW_VEC_ABORT_02
+000000r 1                       .export SHADOW_VEC_IRQ_02
+000000r 1                       .export Pointer_Table
+000000r 1                       .export RESET_entry
+000000r 1               
+000000r 1               ; Symbol definitions.
+000000r 1               BOARD_ID                        := $58
+000000r 1               
+000000r 1                       .zeropage
+000000r 1               
+000000r 1               ; Varibales used by the debugger. They are copied and restored to work-
+000000r 1               ; RAM, so their usage is transparent to the user's application.
+000000r 1  xx           DBG_VAR_00:                     .res 1
+000001r 1  xx           DBG_VAR_01:                     .res 1
+000002r 1  xx           DBG_VAR_02:                     .res 1
+000003r 1  xx           DBG_VAR_03:                     .res 1
+000004r 1  xx           DBG_VAR_04:                     .res 1
+000005r 1               
+000005r 1                       .segment "WORK_RAM"
+000000r 1               
+000000r 1               ; Save-area in work-RAM for A.
+000000r 1  xx xx        RAM_A_SAVE:                     .res 2
+000002r 1               
+000002r 1               ; Save-area in work-RAM for X.
+000002r 1  xx xx        RAM_X_SAVE:                     .res 2
+000004r 1               
+000004r 1               ; Save-area in work-RAM for Y.
+000004r 1  xx xx        RAM_Y_SAVE:                     .res 2
+000006r 1               
+000006r 1               ; Save-area in work-RAM for PC.
+000006r 1  xx xx        RAM_PC_SAVE:                    .res 2
+000008r 1               
+000008r 1               ; Save-area in work-RAM for DP.
+000008r 1  xx xx        RAM_DP_SAVE:                    .res 2
+00000Ar 1               
+00000Ar 1               ; Save-area in work-RAM for the stack pointer.
+00000Ar 1  xx xx        RAM_SP_SAVE:                    .res 2
+00000Cr 1               
+00000Cr 1               ; Save-area in work-RAM for the P register.
+00000Cr 1  xx           RAM_P_SAVE:                     .res 1
+00000Dr 1               
+00000Dr 1               ; Save-area in work-RAM for the emulation bit. This can be thought of
+00000Dr 1               ; as an extenstion bit to P. If E=1, the CPU is in emulation mode.
+00000Dr 1  xx           RAM_E_SAVE:                     .res 1
+00000Er 1               
+00000Er 1               ; Save-area in work-RAM for the PB register.
+00000Er 1  xx           RAM_PB_SAVE:                    .res 1
+00000Fr 1               
+00000Fr 1               ; Save-area in work-RAM for the DB register.
+00000Fr 1  xx           RAM_DB_SAVE:                    .res 1
+000010r 1               
+000010r 1               ; The auto-detected CPU type (0=65C02, 1=65816).
+000010r 1  xx           RAM_CPU_TYPE:                   .res 1
+000011r 1               
+000011r 1               ; 1 if the the monitor is currently being executed, 0 if user code.
+000011r 1  xx xx        RAM_IN_MONITOR:                 .res 2
+000013r 1               
+000013r 1               ; Why control has returned to the ROM monitor:
+000013r 1               ;    2: A BRK instruction was executed.
+000013r 1               ;    7: An NMI was generated.
+000013r 1  xx           RAM_ENTER_MONITOR_REASON :      .res 1
+000014r 1               
+000014r 1               ; Five-byte area where $00-$04 are saved.
+000014r 1  xx xx xx xx  RAM_ZP_SAVE:                    .res 5
+000018r 1  xx           
+000019r 1               
+000019r 1               ; Flag variable at $7E19 of unknown use. It only ever gets set to 0.
+000019r 1  xx           RAM_VAR_7E19:                   .res 1
+00001Ar 1               
+00001Ar 1               ; Save-area in work-RAM for the system VIA's registers.
+00001Ar 1  xx           RAM_PCR_SAVE:                   .res 1
+00001Br 1               
+00001Br 1                       .segment "RAW_VECTORS"
+000000r 1               
+000000r 1               ; Vectors in RAM which are called directly from the vectors in FLASH.
+000000r 1               ; These vectors are typically not overridden by the user, since they
+000000r 1               ; perform critical system and debugger operations.
+000000r 1  xx xx        IRQ_02_ENTRY_VECTOR:            .res 2
+000002r 1  xx xx        NMI_02_ENTRY_VECTOR:            .res 2
+000004r 1  xx xx        BRK_816_ENTRY_VECTOR:           .res 2
+000006r 1  xx xx        NMI_816_ENTRY_VECTOR:           .res 2
+000008r 1               
+000008r 1                       .segment "SHADOW_VECTORS"
+000000r 1               ; Although there are several unused vectors here, they should probably be
+000000r 1               ; left alone, since the debugger might expect the shadow vectors to be
+000000r 1               ; laid out in a certain way and at certain offsets.
+000000r 1               
+000000r 1               ; Shadow vectors for 816 mode, which the user may set to hook the vector.
+000000r 1  xx xx        SHADOW_VEC_COP_816:             .res 2
+000002r 1  xx xx        SHADOW_VEC_BRK_816:             .res 2 ; unused
+000004r 1  xx xx        SHADOW_VEC_ABORT_816:           .res 2
+000006r 1  xx xx        SHADOW_VEC_NMI_816:             .res 2 ; unused
+000008r 1  xx xx        SHADOW_VEC_RSVD_816:            .res 2 ; unused
+00000Ar 1  xx xx        SHADOW_VEC_IRQ_816:             .res 2
+00000Cr 1               
+00000Cr 1               ; Shadow vectors for the 65816 running in '02 emulation mode.
+00000Cr 1  xx xx        SHADOW_VEC_RSVD1_02:            .res 2 ; unused
+00000Er 1  xx xx        SHADOW_VEC_RSVD2_02:            .res 2 ; unused
+000010r 1  xx xx        SHADOW_VEC_COP_02:              .res 2
+000012r 1  xx xx        SHADOW_VEC_RSVD3_02:            .res 2 ; unused
+000014r 1  xx xx        SHADOW_VEC_ABORT_02:            .res 2
+000016r 1               
+000016r 1               ; Shadow vectors for all 65xx processors.
+000016r 1  xx xx        SHADOW_VEC_NMI_02:              .res 2 ; unused
+000018r 1  xx xx        SHADOW_VEC_RESET_02:            .res 2 ; unused
+00001Ar 1  xx xx        SHADOW_VEC_IRQ_02:              .res 2
+00001Cr 1               
+00001Cr 1                       .segment "VIA_USB"
+000000r 1               
+000000r 1               ; IO for the VIA which is used for the USB debugger interface.
+000000r 1               ; Unused registers are commented-out.
+000000r 1               SYSTEM_VIA_IOB          := __VIA_USB_ADDR__ + $00 ; Port B IO register
+000000r 1               SYSTEM_VIA_IOA          := __VIA_USB_ADDR__ + $01 ; Port A IO register
+000000r 1               SYSTEM_VIA_DDRB         := __VIA_USB_ADDR__ + $02 ; Port B data direction register
+000000r 1               SYSTEM_VIA_DDRA         := __VIA_USB_ADDR__ + $03 ; Port A data direction register
+000000r 1               ;SYSTEM_VIA_T1C_L       := __VIA_USB_ADDR__ + $04 ; Timer 1 counter/latches, low-order
+000000r 1               ;SYSTEM_VIA_T1C_H       := __VIA_USB_ADDR__ + $05 ; Timer 1 high-order counter
+000000r 1               ;SYSTEM_VIA_T1L_L       := __VIA_USB_ADDR__ + $06 ; Timer 1 low-order latches
+000000r 1               ;SYSTEM_VIA_T1L_H       := __VIA_USB_ADDR__ + $07 ; Timer 1 high-order latches
+000000r 1               ;SYSTEM_VIA_T2C_L       := __VIA_USB_ADDR__ + $08 ; Timer 2 counter/latches, lower-order
+000000r 1               ;SYSTEM_VIA_T2C_H       := __VIA_USB_ADDR__ + $09 ; Timer 2 high-order counter
+000000r 1               ;SYSTEM_VIA_SR          := __VIA_USB_ADDR__ + $0A ; Shift register
+000000r 1               SYSTEM_VIA_ACR          := __VIA_USB_ADDR__ + $0B ; Auxilliary control register
+000000r 1               SYSTEM_VIA_PCR          := __VIA_USB_ADDR__ + $0C ; Peripheral control register
+000000r 1               ;SYSTEM_VIA_IFR         := __VIA_USB_ADDR__ + $0D ; Interrupt flag register
+000000r 1               ;SYSTEM_VIA_IER         := __VIA_USB_ADDR__ + $0E ; Interrupt enable register
+000000r 1               ;SYSTEM_VIA_ORA_IRA     := __VIA_USB_ADDR__ + $0F ; Port A IO register, but no handshake
+000000r 1               
+000000r 1                       ; The monitor should begin with a header which includes a signature and version.
+000000r 1                       .segment "MONITOR_HEADER"
+000000r 1               
+000000r 1                       ; A Western Design Center mark at the beginning of the header. This is also used
+000000r 1                       ; when checking to see whether to auto-exec a user's application in ROM.
+000000r 1               WDC_Signature:
+000000r 1  57 44 43             .byte   "WDC"
+000003r 1  FF                   .BYTE   $FF
+000004r 1               
+000004r 1               Signature_String:
+000004r 1  82 24 01 FF          .byte   $82,"$",$01,$FF
+000008r 1               
+000008r 1               Monitor_Version_String:
+000008r 1  57 44 43 36          .asciiz   "WDC65c816SXB Custom ROM, v1.0, ts=", .sprintf("%d", .time)
+00000Cr 1  35 63 38 31  
+000010r 1  36 53 58 42  
+000035r 1               
+000035r 1                       .segment "POINTER_TABLE"
+000000r 1               
+000000r 1               ; A table of important pointers. This is located at a fixed address $80 bytes
+000000r 1               ; into the monitor code, and is 128 bytes long in total. Not sure if the debugger
+000000r 1               ; uses this table for any reason, but user applications could use it, for example,
+000000r 1               ; to read and write to the USB FIFO. There is room for more pointers at the end.
+000000r 1               Pointer_Table:
+000000r 1               
+000000r 1                       ; Used entries in the pointer table.
+000000r 1  rr rr                .addr   Signature_String
+000002r 1  rr rr                .addr   Initialize_System
+000004r 1  rr rr                .addr   Is_VIA_USB_RX_Data_Avail
+000006r 1  rr rr                .addr   Sys_VIA_USB_Char_RX
+000008r 1  rr rr                .addr   Sys_VIA_USB_Char_TX
+00000Ar 1  rr rr                .addr   RAM_IN_MONITOR
+00000Cr 1  rr rr                .addr   Monitor_Version_String
+00000Er 1  rr rr                .addr   IRQ_02_ENTRY_VECTOR
+000010r 1  rr rr                .addr   IRQ_02_Entry_Vector_Default
+000012r 1  rr rr                .addr   NMI_02_Entry_Vector_Default
+000014r 1  rr rr                .addr   BRK_816_Entry_Vector_Default
+000016r 1  rr rr                .addr   NMI_816_Entry_Vector_Default
+000018r 1               
+000018r 1                       ; This is the start of the actual monitor code.
+000018r 1                       .segment "MON_CODE"
+000000r 1               
+000000r 1               ; Called directly from FLASH vector on IRQ in emulation mode. IRQ and BRK
+000000r 1               ; are shared in this mode, so jump to monitor code which checks for BRK.
+000000r 1               IRQ_02_entry:
+000000r 1  6C rr rr             jmp     (IRQ_02_ENTRY_VECTOR)
+000003r 1               
+000003r 1               ; Called directly from FLASH vector on NMI in emulation mode. Jump to monitor
+000003r 1               ; code to break into the debugger.
+000003r 1               NMI_02_entry:
+000003r 1  6C rr rr             jmp     (NMI_02_ENTRY_VECTOR)
+000006r 1               
+000006r 1               ; Called directly from FLASH vector on BRK in 816 mode. Jump to monitor
+000006r 1               ; code to break into the debugger.
+000006r 1               BRK_816_entry:
+000006r 1  6C rr rr             jmp     (BRK_816_ENTRY_VECTOR)
+000009r 1               
+000009r 1               ; Called directly from FLASH vector on NMI in 816 mode. Jump to monitor
+000009r 1               ; code to break into the debugger.
+000009r 1               NMI_816_entry:
+000009r 1  6C rr rr             jmp     (NMI_816_ENTRY_VECTOR)
+00000Cr 1               
+00000Cr 1               ; Called directly from FLASH vector on COP in emulation mode. Call the
+00000Cr 1               ; user's handler through the shadow vector.
+00000Cr 1               COP_02_entry:
+00000Cr 1  6C rr rr             jmp     (SHADOW_VEC_COP_02)
+00000Fr 1               
+00000Fr 1               ; Called directly from FLASH vector on ABORT in emulation mode. Call the
+00000Fr 1               ; user's handler through the shadow vector.
+00000Fr 1               ABORT_02_entry:
+00000Fr 1  6C rr rr             jmp     (SHADOW_VEC_ABORT_02)
+000012r 1               
+000012r 1               ; Called directly from FLASH vector on IRQ in 816 mode.
+000012r 1               ; BRK and IRQ are separate in 816 mode, so no need to run any monitor code.
+000012r 1               ; Simply invoke the user's IRQ handler through the shadow vector.
+000012r 1               IRQ_816_entry:
+000012r 1  6C rr rr             jmp     (SHADOW_VEC_IRQ_816)
+000015r 1               
+000015r 1               ; Called directly from FLASH vector on ABORT in 816 mode.
+000015r 1               ABORT_816_entry:
+000015r 1  6C rr rr             jmp     (SHADOW_VEC_ABORT_816)
+000018r 1               
+000018r 1               ; Called directly from FLASH vector on COP in 816 mode.
+000018r 1               COP_816_entry:
+000018r 1  6C rr rr             jmp     (SHADOW_VEC_COP_816)
+00001Br 1               
+00001Br 1               ; Does nothing forever. Called directly from several reserved vectors, and
+00001Br 1               ; is also the default handler for all shadow vectors.
+00001Br 1               Infinite_Loop:
+00001Br 1  20 rr rr             jsr     Do_Nothing_Subroutine
+00001Er 1  80 FB                BRA     Infinite_Loop
+000020r 1               
+000020r 1               ; Called directly from FLASH vector on RESET. Always executed in emulation mode.
+000020r 1               RESET_entry:
+000020r 1                       ; Save the CPU context, init vectors, and switch into emulation mode.
+000020r 1  20 rr rr             JSR     Initialize_Upon_Reset
+000023r 1               
+000023r 1                       ; Execute the user's application if the signature is present.
+000023r 1  20 rr rr             jsr     Check_AutoExec_Usr_App
+000026r 1               
+000026r 1                       ; Save a copy of ZP memory, and sync up with the debugger.
+000026r 1  4C rr rr             jmp     Save_ZP_Sync_With_Debugger
+000029r 1               
+000029r 1               ; Checks the beginning of flash for "WDC", and jumps to the following instruction
+000029r 1               ; if present. This code must be called in emulation mode.
+000029r 1               Check_AutoExec_Usr_App:
+000029r 1               
+000029r 1                       ; Check to see if the user's area in ROM starts with "WDC".
+000029r 1  A2 02                ldx     #$02
+00002Br 1               @loop:
+00002Br 1  BD rr rr             lda     WDC_Signature,x
+00002Er 1  DD rr rr             cmp     __USR_ROM_START__,x
+000031r 1  D0 0B                bne     @done
+000033r 1  CA                   dex
+000034r 1  10 F5                bpl     @loop
+000036r 1               
+000036r 1                       ; We're no longer in the ROM monitor since we're going to execute user
+000036r 1                       ; code. This is critical to allow NMI to break into the debug monitor.
+000036r 1  A9 00                lda     #$00
+000038r 1  8D rr rr             STA     RAM_IN_MONITOR
+00003Br 1               
+00003Br 1                       ; The signature matches, so jump to the user's application.
+00003Br 1  4C rr rr             jmp     __USR_ROM_START__ + 3
+00003Er 1               
+00003Er 1               @done:
+00003Er 1  60                   rts
+00003Fr 1               
+00003Fr 1               ; Called in emulation mode when the CPU is reset.
+00003Fr 1               Initialize_Upon_Reset:
+00003Fr 1                       ; Push processor status on stack. The stack is not initialized yet,
+00003Fr 1                       ; but Continue_System_Init expects P and A to be pushed on the stack,
+00003Fr 1                       ; and we know the stack will be somewhere in page 1, so there will be
+00003Fr 1                       ; RAM there to support it.
+00003Fr 1  08                   PHP
+000040r 1               
+000040r 1                       ; Set A to 8-bit mode. But why? We know we're in emulation mode here.
+000040r 1  E2 20                SEP     #$20
+000042r 1               
+000042r 1                       ; Push A, load A with 1, and continue with initialization.
+000042r 1  48                   pha
+000043r 1  A9 01                lda     #$01
+000045r 1  80 04                BRA     Continue_System_Init
+000047r 1               
+000047r 1               ; Called to initialize the system. The only place this is explicitly called
+000047r 1               ; is from Initialize_Upon_Reset, which is executed in emulation mode when the
+000047r 1               ; CPU is reset. But, there is a pointer to this function in the data pointer
+000047r 1               ; table, so perhaps the debugger calls it to reset the system. As such, this
+000047r 1               ; function ensures it works correctly even if called from native mode.
+000047r 1               Initialize_System:
+000047r 1                       ; Push processor status on stack.
+000047r 1  08                   PHP
+000048r 1               
+000048r 1                       ; Set A to 8-bit mode and push it.
+000048r 1  E2 20                SEP     #$20
+00004Ar 1  48                   PHA
+00004Br 1               
+00004Br 1               ; If called from an actual RESET, the CPU will be in emulation mode. If called
+00004Br 1               ; through the data pointer table, the CPU may be in native mode with 8-bit A.
+00004Br 1               ; Upon return, the CPU will be in emulation mode.
+00004Br 1               Continue_System_Init:
+00004Br 1               
+00004Br 1                       ; Disable interrupts and clear the decimal flag.
+00004Br 1  78                   SEI
+00004Cr 1  D8                   CLD
+00004Dr 1               
+00004Dr 1                       ; Zero a variable whose use is currently unknown.
+00004Dr 1  9C rr rr             STZ     RAM_VAR_7E19
+000050r 1               
+000050r 1                       ; Switch to native mode.
+000050r 1  18                   clc
+000051r 1  FB                   XCE
+000052r 1               
+000052r 1                       ; Set XY to 16-bit mode and save them into the RAM save area.
+000052r 1  C2 10                REP     #$10
+000054r 1               .I16
+000054r 1  8E rr rr             stx     RAM_X_SAVE
+000057r 1  8C rr rr             STY     RAM_Y_SAVE
+00005Ar 1               
+00005Ar 1                       ; Set A and XY to 8-bit mode. Assembler is 8-bit for A already.
+00005Ar 1  E2 30                SEP     #$30
+00005Cr 1               .I8
+00005Cr 1               
+00005Cr 1                       ; Pull the prior value of A (8-bits) into X, and P into Y.
+00005Cr 1  FA                   plx
+00005Dr 1  7A                   PLY
+00005Er 1               
+00005Er 1                       ; Save the processor status byte into the RAM save area.
+00005Er 1  8C rr rr             STY     RAM_P_SAVE
+000061r 1               
+000061r 1                       ; Push 8-bit A back onto the stack.
+000061r 1  48                   PHA
+000062r 1               
+000062r 1                       ; Move the prior 8-bit value of A from X back into A.
+000062r 1  8A                   TXA
+000063r 1               
+000063r 1                       ; Set A to 16-bit mode.
+000063r 1  C2 20                REP     #$20
+000065r 1               .A16
+000065r 1               
+000065r 1                       ; Save A (all 16 bits) into the RAM save area.
+000065r 1  8F rr rr rr          STA     f:RAM_A_SAVE
+000069r 1               
+000069r 1                       ; Save DP (16 bits) into the RAM save area.
+000069r 1  7B                   TDC
+00006Ar 1  8F rr rr rr          STA     f:RAM_DP_SAVE
+00006Er 1  3B                   TSC
+00006Fr 1               
+00006Fr 1                       ; Save the 16-bit stack pointer into the RAM save area.
+00006Fr 1  18                   CLC
+000070r 1  69 03 00             ADC     #$03
+000073r 1  8F rr rr rr          STA     f:RAM_SP_SAVE
+000077r 1               
+000077r 1                       ; Set A and XY to 8-bit mode. Assembler for XY is already 8-bit.
+000077r 1  E2 30                SEP     #$30
+000079r 1               .A8
+000079r 1               
+000079r 1                       ; Save the 8-bit program bank into the RAM save area.
+000079r 1  4B                   PHK
+00007Ar 1  68                   pla
+00007Br 1  8F rr rr rr          STA     f:RAM_PB_SAVE
+00007Fr 1               
+00007Fr 1                       ; Save the 8-bit data bank into the RAM save area.
+00007Fr 1  8B                   PHB
+000080r 1  68                   PLA
+000081r 1  8F rr rr rr          STA     f:RAM_DB_SAVE
+000085r 1               
+000085r 1                       ; Save the emulation mode flag into the RAM save area. Note it gets
+000085r 1                       ; saved as "1", which means the CPU will be in emulation mode once
+000085r 1                       ; the context is restored and the user's code is executed.
+000085r 1  A9 01                lda     #$01
+000087r 1  8F rr rr rr          STA     f:RAM_E_SAVE
+00008Br 1               
+00008Br 1                       ; CPU detection code. Determine if this CPU is a 65C02 or 65816.
+00008Br 1               
+00008Br 1                       ; Try to switch into emulation mode.
+00008Br 1  38                   SEC
+00008Cr 1  FB                   XCE     ; This is a NOP on a 65C02.
+00008Dr 1               
+00008Dr 1                       ; Try to switch into native mode.
+00008Dr 1  18                   CLC
+00008Er 1  FB                   XCE     ; This is a NOP on a 65C02. C will be set on a 65816.
+00008Fr 1               
+00008Fr 1                       ; X = 0 if the CPU is a 65C02.
+00008Fr 1  A2 00                LDX     #$00
+000091r 1               
+000091r 1                       ; If carry is clear, the CPU is 65C02, not 65816.
+000091r 1  90 01                BCC     @skip_inx
+000093r 1               
+000093r 1                       ; If the CPU is a 65816, carry will be set, and X will be 1.
+000093r 1  E8                   INX
+000094r 1               
+000094r 1               @skip_inx:
+000094r 1  FB                   XCE     ; Switch into emulation mode. This is a NOP on a 65C02.
+000095r 1  8E rr rr             STX     RAM_CPU_TYPE
+000098r 1               
+000098r 1                       ; Pull the prior value of A, pushed before the call to
+000098r 1                       ; Continue_System_Init. If this was called from a physical
+000098r 1                       ; RESET, $01 is pushed. Otherwise, whatever was in A is pushed.
+000098r 1  68                   PLA
+000099r 1  F0 16                BEQ     @skip_shadow_vec_init
+00009Br 1               
+00009Br 1                       ; a RESET has occurred, so initialize all the shadow vectors.
+00009Br 1                       ; Initialize all shadow vectors to point to an infinite loop.
+00009Br 1                       ; Done in two passes. This pass sets the LSB of the vector.
+00009Br 1  A9 rr                lda     #<Infinite_Loop
+00009Dr 1  A2 1C                ldx     #$1C
+00009Fr 1               @lsb_loop:
+00009Fr 1  9D rr rr             sta     __SHADOW_VECTORS_LOAD__-2,x
+0000A2r 1  CA                   dex
+0000A3r 1  CA                   dex
+0000A4r 1  D0 F9                BNE     @lsb_loop
+0000A6r 1               
+0000A6r 1                       ; Finish initializing the shadow registers by writing the MSB.
+0000A6r 1  A9 rr                lda     #>Infinite_Loop
+0000A8r 1  A2 1C                ldx     #$1C
+0000AAr 1               @msb_loop:
+0000AAr 1  9D rr rr             sta     __SHADOW_VECTORS_LOAD__-1,x
+0000ADr 1  CA                   dex
+0000AEr 1  CA                   dex
+0000AFr 1  D0 F9                BNE     @msb_loop
+0000B1r 1               
+0000B1r 1               @skip_shadow_vec_init:
+0000B1r 1                       ; We're now in the debugging monitor.
+0000B1r 1  A9 01                LDA     #$01
+0000B3r 1  8D rr rr             STA     RAM_IN_MONITOR
+0000B6r 1               
+0000B6r 1                       ; Store 0 in the location after RAM_IN_MONITOR. Not sure why.
+0000B6r 1  3A                   dec
+0000B7r 1  8D rr rr             STA     RAM_IN_MONITOR+1
+0000BAr 1               
+0000BAr 1                       ; Set a pointer to the default BRK handler when in native mode.
+0000BAr 1  A9 rr                lda     #<BRK_816_Entry_Vector_Default
+0000BCr 1  8D rr rr             sta     BRK_816_ENTRY_VECTOR
+0000BFr 1  A9 rr                lda     #>BRK_816_Entry_Vector_Default
+0000C1r 1  8D rr rr             STA     BRK_816_ENTRY_VECTOR+1
+0000C4r 1               
+0000C4r 1                       ; Set a pointer to the default NMI handler when in native mode.
+0000C4r 1  A9 rr                LDA     #<NMI_816_Entry_Vector_Default
+0000C6r 1  8D rr rr             STA     NMI_816_ENTRY_VECTOR
+0000C9r 1  A9 rr                LDA     #>NMI_816_Entry_Vector_Default
+0000CBr 1  8D rr rr             STA     NMI_816_ENTRY_VECTOR+1
+0000CEr 1               
+0000CEr 1                       ; Set a pointer to the default IRQ entry vector.
+0000CEr 1  A9 rr                lda     #<IRQ_02_Entry_Vector_Default
+0000D0r 1  8D rr rr             sta     IRQ_02_ENTRY_VECTOR
+0000D3r 1  A9 rr                lda     #>IRQ_02_Entry_Vector_Default
+0000D5r 1  8D rr rr             STA     IRQ_02_ENTRY_VECTOR+1
+0000D8r 1               
+0000D8r 1                       ; Set a pointer to the default NMI entry vector.
+0000D8r 1  A9 rr                lda     #<NMI_02_Entry_Vector_Default
+0000DAr 1  8D rr rr             sta     NMI_02_ENTRY_VECTOR
+0000DDr 1  A9 rr                lda     #>NMI_02_Entry_Vector_Default
+0000DFr 1  8D rr rr             STA     NMI_02_ENTRY_VECTOR+1
+0000E2r 1               
+0000E2r 1  20 rr rr             jsr     Initialize_System_VIA
+0000E5r 1  60                   rts
+0000E6r 1               
+0000E6r 1               ; Saves the first 5 bytes of zero-page memory, and syncs with the debugger,
+0000E6r 1               ; allowing it to control the device.
+0000E6r 1               ; Upon entry, the CPU will always be in emulation mode.
+0000E6r 1               Save_ZP_Sync_With_Debugger:
+0000E6r 1                       ; Copy the first 5 bytes of ZP to the work area in RAM.
+0000E6r 1  A2 04                ldx     #$04
+0000E8r 1               @copy_loop:
+0000E8r 1  BD rr rr             lda     a:DBG_VAR_00,x
+0000EBr 1  9D rr rr             sta     RAM_ZP_SAVE,x
+0000EEr 1  CA                   dex
+0000EFr 1  10 F7                BPL     @copy_loop
+0000F1r 1               
+0000F1r 1               @begin_debugger_sync:
+0000F1r 1                       ; Read the first snc char from the debugger.
+0000F1r 1  20 rr rr             JSR     Sys_VIA_USB_Char_RX
+0000F4r 1               
+0000F4r 1               @check_for_0x55:
+0000F4r 1                       ; If the first sync char is not $55, restart the sync process.
+0000F4r 1  C9 55                cmp     #$55
+0000F6r 1  D0 F9                BNE     @begin_debugger_sync
+0000F8r 1               
+0000F8r 1                       ; Read the second cync char from the debugger.
+0000F8r 1  20 rr rr             JSR     Sys_VIA_USB_Char_RX
+0000FBr 1               
+0000FBr 1                       ; If the second sync char is not $AA, check for %55.
+0000FBr 1  C9 AA                CMP     #$AA
+0000FDr 1  D0 F5                BNE     @check_for_0x55
+0000FFr 1               
+0000FFr 1                       ; Send a $CC to the debugger.
+0000FFr 1  A9 CC                lda     #$CC
+000101r 1  20 rr rr             JSR     Sys_VIA_USB_Char_TX
+000104r 1               
+000104r 1                       ; Read the command byte from the debugger.
+000104r 1  20 rr rr             JSR     Sys_VIA_USB_Char_RX
+000107r 1               
+000107r 1                       ; See if the command is within the supported range. If not,
+000107r 1                       ; restart the debugger sync sequence.
+000107r 1  38                   sec
+000108r 1  E9 00                sbc     #$00
+00010Ar 1  C9 0A                cmp     #$0A
+00010Cr 1  B0 E3                BCS     @begin_debugger_sync
+00010Er 1               
+00010Er 1                       ; Set up a simulated function call to jump to the handler
+00010Er 1                       ; for the selected debugger command. Multiple the command
+00010Er 1                       ; by two since each function pointer is two bytes.
+00010Er 1  0A                   asl
+00010Fr 1  AA                   TAX
+000110r 1               
+000110r 1                       ; Push the address-1 to return to once the command is complete.
+000110r 1                       ; We'll return to .begin_debugger_sync:.
+000110r 1  A9 rr                lda     #>(@begin_debugger_sync-1)
+000112r 1  48                   pha
+000113r 1  A9 rr                lda     #<(@begin_debugger_sync-1)
+000115r 1  48                   PHA
+000116r 1               
+000116r 1                       ; Push the jump table address and issue the RTS to call the handler.
+000116r 1  BD rr rr             lda     Cmd_Jump_Table+1,x
+000119r 1  48                   pha
+00011Ar 1  BD rr rr             lda     Cmd_Jump_Table,x
+00011Dr 1  48                   pha
+00011Er 1  60                   rts
+00011Fr 1               
+00011Fr 1               ; Jump table for debugger commands.
+00011Fr 1               Cmd_Jump_Table:
+00011Fr 1  rr rr                .WORD   Dbg_Cmd_0_Send_Zero         - 1
+000121r 1  rr rr                .WORD   Dbg_Cmd_1_Seq_Test          - 1
+000123r 1  rr rr                .WORD   Dbg_Cmd_2_Write_Mem         - 1
+000125r 1  rr rr                .WORD   Dbg_Cmd_3_Read_Mem          - 1
+000127r 1  rr rr                .WORD   Dbg_Cmd_4_Sys_Info          - 1
+000129r 1  rr rr                .WORD   Dbg_Cmd_5_Exec              - 1
+00012Br 1  rr rr                .WORD   Dbg_Cmd_6_No_Op             - 1
+00012Dr 1  rr rr                .WORD   Dbg_Cmd_7_No_Op             - 1
+00012Fr 1  rr rr                .WORD   Dbg_Cmd_8_BRK               - 1
+000131r 1  rr rr                .WORD   Dbg_Cmd_9_Read_Byte_and_BRK - 1
+000133r 1               
+000133r 1               ; Debugger command 0. Simply sends $00 to the debugger.
+000133r 1               Dbg_Cmd_0_Send_Zero:
+000133r 1  A9 00                LDA     #$00
+000135r 1  4C rr rr             jmp     Sys_VIA_USB_Char_TX
+000138r 1               
+000138r 1               ; Debugger command 1: some kind of sequence test. Debugger sends a 16-bit
+000138r 1               ; count of the bytes to test. The debugger must then send an incrementing
+000138r 1               ; sequence of bytes, starting at $00 to the monitor. The monitor sends
+000138r 1               ; back the next expected byte. If the monitor receives a byte it does not
+000138r 1               ; expect, it enters an infinite loop.
+000138r 1               Dbg_Cmd_1_Seq_Test:
+000138r 1               
+000138r 1                       ; DBG_VAR_02 is the next value in the sequence. Start with $00.
+000138r 1  A9 00                lda     #$00
+00013Ar 1  8D rr rr             STA     a:DBG_VAR_02
+00013Dr 1               
+00013Dr 1                      ; Read the LSB of the byte count.
+00013Dr 1  20 rr rr             JSR     Sys_VIA_USB_Char_RX
+000140r 1  8D rr rr             sta     a:DBG_VAR_00
+000143r 1               
+000143r 1                       ; Read the MSB of the byte count.
+000143r 1  20 rr rr             jsr     Sys_VIA_USB_Char_RX
+000146r 1  8D rr rr             STA     a:DBG_VAR_01
+000149r 1               
+000149r 1                       ; If the byte count is 0, we're done.
+000149r 1  0D rr rr             ora     a:DBG_VAR_00
+00014Cr 1  F0 26                BEQ     @done
+00014Er 1               
+00014Er 1                       ; Set up the count's MSB to be 1-based.
+00014Er 1  AD rr rr             LDA     a:DBG_VAR_00
+000151r 1  F0 03                beq     @read_next_byte
+000153r 1  EE rr rr             INC     a:DBG_VAR_01
+000156r 1               
+000156r 1               @read_next_byte:
+000156r 1                       ; Read the next byte in the sequence from the debugger.
+000156r 1  20 rr rr             JSR     Sys_VIA_USB_Char_RX
+000159r 1               
+000159r 1                       ; See if the received byte matches the next one in the sequence.
+000159r 1  CD rr rr             CMP     a:DBG_VAR_02
+00015Cr 1  F0 05                BEQ     @continue
+00015Er 1               
+00015Er 1                       ; If the sequence is not correct, enter an infinite loop.
+00015Er 1               @infinite_loop:
+00015Er 1  20 rr rr             jsr     Do_Nothing_Subroutine
+000161r 1  80 FB                BRA     @infinite_loop
+000163r 1               
+000163r 1               @continue:
+000163r 1                       ; Send the next byte in the sequence to the debugger.
+000163r 1  1A                   inc
+000164r 1  20 rr rr             JSR     Sys_VIA_USB_Char_TX
+000167r 1               
+000167r 1                       ; Save the next byte in the sequence.
+000167r 1  EE rr rr             INC     a:DBG_VAR_02
+00016Ar 1               
+00016Ar 1                       ; Decrement the byte count.
+00016Ar 1  CE rr rr             dec     a:DBG_VAR_00
+00016Dr 1  D0 E7                bne     @read_next_byte
+00016Fr 1  CE rr rr             dec     a:DBG_VAR_01
+000172r 1  D0 E2                BNE     @read_next_byte
+000174r 1               
+000174r 1                       ; All done with the command.
+000174r 1  60           @done:  rts
+000175r 1               
+000175r 1               ; Debugger command 2: write memory. The debugger sends a 24-bit starting
+000175r 1               ; address, then a 16-bit count, and then the data to write. Memory writes
+000175r 1               ; to the first 5 bytes of memory are automatically redirected to the save
+000175r 1               ; area in work-RAM for these memory locations.
+000175r 1               Dbg_Cmd_2_Write_Mem:
+000175r 1               
+000175r 1                       ; Read the 24-bit starting address, LSB-first.
+000175r 1  20 rr rr             jsr     Sys_VIA_USB_Char_RX
+000178r 1  8D rr rr             sta     a:DBG_VAR_00    ; 16-bit addr LSB
+00017Br 1  20 rr rr             jsr     Sys_VIA_USB_Char_RX
+00017Er 1  8D rr rr             sta     a:DBG_VAR_01    ; 16-bit addr MSB
+000181r 1  20 rr rr             jsr     Sys_VIA_USB_Char_RX
+000184r 1  8D rr rr             STA     a:DBG_VAR_02    ; bank
+000187r 1               
+000187r 1                       ; Branch if bank is > $00.
+000187r 1  A9 00                lda     #$00
+000189r 1  CD rr rr             cmp     a:DBG_VAR_02
+00018Cr 1  90 1C                BCC     @read_byte_count
+00018Er 1               
+00018Er 1                       ; At this point, bank is $00. Branch if page (16-bit MSB) is > $80.
+00018Er 1  A9 80                lda     #$80
+000190r 1  CD rr rr             cmp     a:DBG_VAR_01
+000193r 1  90 15                BCC     @read_byte_count
+000195r 1               
+000195r 1                       ; At this point, bank=0, page <= $80. Branch if addr LSB > $00.
+000195r 1  A9 00                lda     #$00
+000197r 1  CD rr rr             cmp     a:DBG_VAR_00
+00019Ar 1  90 0E                BCC     @read_byte_count
+00019Cr 1               
+00019Cr 1                       ; At this point, bank=0, page <= $80, addr_LSB=0, which is the
+00019Cr 1                       ; first byte of any page in RAM, plus the first page of FLASH,
+00019Cr 1                       ; in bank 0. Now branch if bank <= 1, which is always the case,
+00019Cr 1                       ; since bank is $00 at this point. Why are they doing all this?
+00019Cr 1  A9 01                lda     #$01
+00019Er 1  CD rr rr             cmp     a:DBG_VAR_02
+0001A1r 1  B0 07                BCS     @read_byte_count
+0001A3r 1               
+0001A3r 1                       ; This code stores $01 in RAM_VAR_7E19, but this code is apparently
+0001A3r 1                       ; never executed. This means RAM_VAR_7E19 will always be $00.
+0001A3r 1  A9 01                lda     #$01
+0001A5r 1  8D rr rr             sta     RAM_VAR_7E19
+0001A8r 1  80 43                BRA     @next_addr
+0001AAr 1               
+0001AAr 1               @read_byte_count:
+0001AAr 1                       ; Read the 16-bit byte count from the debugger, LSB-first.
+0001AAr 1  20 rr rr             JSR     Sys_VIA_USB_Char_RX
+0001ADr 1  8D rr rr             sta     a:DBG_VAR_03
+0001B0r 1  20 rr rr             jsr     Sys_VIA_USB_Char_RX
+0001B3r 1  8D rr rr             STA     a:DBG_VAR_04
+0001B6r 1               
+0001B6r 1                       ; If the tranfer count is 0, cleanup and return.
+0001B6r 1  0D rr rr             ora     a:DBG_VAR_03
+0001B9r 1  F0 49                BEQ     @cleanup
+0001BBr 1               
+0001BBr 1                       ; Set the MSB of the transfer count to be 1-based.
+0001BBr 1  A0 00                ldy     #$00
+0001BDr 1  AD rr rr             lda     a:DBG_VAR_03
+0001C0r 1  F0 03                beq     @transfer_byte
+0001C2r 1  EE rr rr             INC     a:DBG_VAR_04
+0001C5r 1               
+0001C5r 1               @transfer_byte:
+0001C5r 1                       ; If the address is not in the first bank and first page, then
+0001C5r 1                       ; transfer the memory contents from the actual memory location.
+0001C5r 1  AD rr rr             lda     a:DBG_VAR_01
+0001C8r 1  0D rr rr             ora     a:DBG_VAR_02
+0001CBr 1  D0 12                BNE     @transfer_byte_from_real_addr
+0001CDr 1               
+0001CDr 1                       ; Now see if the address is within the first five bytes of RAM.
+0001CDr 1                       ; This address is used for debugger command parameters.
+0001CDr 1  AD rr rr             lda     a:DBG_VAR_00
+0001D0r 1  C9 05                cmp     #$05
+0001D2r 1  B0 0B                BCS     @transfer_byte_from_real_addr
+0001D4r 1               
+0001D4r 1                       ; The address is within the 5-byte debugger area in the zero-
+0001D4r 1                       ; page. First, read the byte from the debugger to write.
+0001D4r 1  A8                   tay
+0001D5r 1  20 rr rr             JSR     Sys_VIA_USB_Char_RX
+0001D8r 1               
+0001D8r 1                       ; Now save the byte into the save area in work-RAM.
+0001D8r 1  99 rr rr             STA     RAM_ZP_SAVE,y
+0001DBr 1               
+0001DBr 1                       ; Move to the next byte to transfer.
+0001DBr 1  A0 00                ldy     #$00
+0001DDr 1  F0 0E                BEQ     @next_addr
+0001DFr 1               
+0001DFr 1               @transfer_byte_from_real_addr:
+0001DFr 1                       ; Read the byte to write from the debugger.
+0001DFr 1  20 rr rr             JSR     Sys_VIA_USB_Char_RX
+0001E2r 1               
+0001E2r 1                       ; See if we're running on a 65C02 or a 65816.
+0001E2r 1  AE rr rr             ldx     RAM_CPU_TYPE
+0001E5r 1  D0 04                BNE     @cpu_is_65816
+0001E7r 1               
+0001E7r 1                       ; For the 65C02, ignore the bank, and only use the 16-bit addr.
+0001E7r 1  91 rr                sta     (DBG_VAR_00),y
+0001E9r 1  F0 02                BEQ     @next_addr
+0001EBr 1               
+0001EBr 1               @cpu_is_65816:
+0001EBr 1                       ; Use the ZP-indirect-long mode to write to the full 24-bit addr.
+0001EBr 1  87 00                STA     [0]
+0001EDr 1               
+0001EDr 1               @next_addr:
+0001EDr 1                       ; Move to the next address.
+0001EDr 1  EE rr rr             INC     a:DBG_VAR_00
+0001F0r 1  D0 08                bne     @dec_count
+0001F2r 1  EE rr rr             inc     a:DBG_VAR_01
+0001F5r 1  D0 03                bne     @dec_count
+0001F7r 1  EE rr rr             INC     a:DBG_VAR_02
+0001FAr 1               
+0001FAr 1               @dec_count:
+0001FAr 1                       ; Decrement the transfer count, and see if we're done.
+0001FAr 1  CE rr rr             DEC     a:DBG_VAR_03
+0001FDr 1  D0 C6                bne     @transfer_byte
+0001FFr 1  CE rr rr             dec     a:DBG_VAR_04
+000202r 1  D0 C1                BNE     @transfer_byte
+000204r 1               
+000204r 1               @cleanup:
+000204r 1                       ; Clear RAM_VAR_7E19 for some unknown reason. But it would never
+000204r 1                       ; get set in the first place, so this code seems unnecessary.
+000204r 1  AD rr rr             LDA     RAM_VAR_7E19
+000207r 1  F0 03                beq     @done
+000209r 1  9C rr rr             STZ     RAM_VAR_7E19
+00020Cr 1               
+00020Cr 1  60           @done:  rts
+00020Dr 1               
+00020Dr 1               ; Debugger command 3: read memory. The debugger sends a 24-bit starting
+00020Dr 1               ; address, then a 16-bit count. and then the monitor sends the request
+00020Dr 1               ; memory contents to the debugger. Memory reads to the first 5 bytes of
+00020Dr 1               ; memory are automatically redirected to the save area in work-RAM for
+00020Dr 1               ; these memory locations.
+00020Dr 1               Dbg_Cmd_3_Read_Mem:
+00020Dr 1                       ; Read the 24-bit starting address, LSB-first.
+00020Dr 1  20 rr rr             jsr     Sys_VIA_USB_Char_RX
+000210r 1  8D rr rr             sta     a:DBG_VAR_00	; 16-bit LSB
+000213r 1  20 rr rr             jsr     Sys_VIA_USB_Char_RX
+000216r 1  8D rr rr             sta     a:DBG_VAR_01	; Page
+000219r 1  20 rr rr             jsr     Sys_VIA_USB_Char_RX
+00021Cr 1  8D rr rr             STA     a:DBG_VAR_02	; Bank
+00021Fr 1               
+00021Fr 1                       ; Read the 16-bit byte count, LSB-first.
+00021Fr 1  20 rr rr             jsr     Sys_VIA_USB_Char_RX
+000222r 1  8D rr rr             sta     a:DBG_VAR_03	; Count LSB
+000225r 1  20 rr rr             jsr     Sys_VIA_USB_Char_RX
+000228r 1  8D rr rr             STA     a:DBG_VAR_04	; Count MSB
+00022Br 1               
+00022Br 1                       ; If the byte count is 0, then we're done.
+00022Br 1  0D rr rr             ora     a:DBG_VAR_03
+00022Er 1  F0 46                BEQ     @done
+000230r 1               
+000230r 1                       ; Set up the count MSB to be 1-based.
+000230r 1  A0 00                ldy     #$00
+000232r 1  AD rr rr             lda     a:DBG_VAR_03
+000235r 1  F0 03                beq     @transfer_byte
+000237r 1  EE rr rr             INC     a:DBG_VAR_04
+00023Ar 1               
+00023Ar 1               @transfer_byte:
+00023Ar 1                       ; If the address is not in the first bank and first page, then
+00023Ar 1                       ; transfer the memory contents from the actual memory location.
+00023Ar 1  AD rr rr             lda     a:DBG_VAR_01
+00023Dr 1  0D rr rr             ora     a:DBG_VAR_02
+000240r 1  D0 0F                BNE     @transfer_byte_from_real_addr
+000242r 1               
+000242r 1                       ; Now see if the address is within the first five bytes of RAM.
+000242r 1                       ; This address is used for debugger command parameters.
+000242r 1  AD rr rr             lda     a:DBG_VAR_00
+000245r 1  C9 05                cmp     #$05
+000247r 1  B0 08                BCS     @transfer_byte_from_real_addr
+000249r 1               
+000249r 1                       ; The address is within the 5-byte debugger area in the zero-page,
+000249r 1                       ; so send the contents of the save area in RAM to the debugger.
+000249r 1  A8                   tay
+00024Ar 1  B9 rr rr             LDA     RAM_ZP_SAVE,y
+00024Dr 1               
+00024Dr 1                       ; Move to the next byte to transfer.
+00024Dr 1  A0 00                ldy     #$00
+00024Fr 1  F0 0B                BEQ     @next_addr
+000251r 1               
+000251r 1               @transfer_byte_from_real_addr:
+000251r 1                       ; See if we're running on a 65C02 or a 65816.
+000251r 1  AD rr rr             lda     RAM_CPU_TYPE
+000254r 1  D0 04                BNE     @cpu_is_65816
+000256r 1               
+000256r 1                       ; For the 65C02, ignore the bank, and only use the 16-bit addr.
+000256r 1  B1 rr                lda     (DBG_VAR_00),y
+000258r 1  80 02                BRA     @next_addr
+00025Ar 1               
+00025Ar 1               @cpu_is_65816:
+00025Ar 1                       ; Use the ZP-indirect-long mode to read from the full 24-bit addr.
+00025Ar 1  A7 00                LDA     [0]
+00025Cr 1               
+00025Cr 1               @next_addr:
+00025Cr 1                       ; Send the byte read from memory to the debugger.
+00025Cr 1  20 rr rr             JSR     Sys_VIA_USB_Char_TX
+00025Fr 1               
+00025Fr 1                       ; Move to the next address.
+00025Fr 1  EE rr rr             inc     a:DBG_VAR_00
+000262r 1  D0 08                bne     @dec_count
+000264r 1  EE rr rr             inc     a:DBG_VAR_01
+000267r 1  D0 03                bne     @dec_count
+000269r 1  EE rr rr             INC     a:DBG_VAR_02
+00026Cr 1               
+00026Cr 1               @dec_count:
+00026Cr 1                       ; Decrement the transfer count, and see if we're done.
+00026Cr 1  CE rr rr             DEC     a:DBG_VAR_03
+00026Fr 1  D0 C9                bne     @transfer_byte
+000271r 1  CE rr rr             dec     a:DBG_VAR_04
+000274r 1  D0 C4                BNE     @transfer_byte
+000276r 1               
+000276r 1  60           @done:  rts
+000277r 1               
+000277r 1               ; Debugger command 4. Get System Info.
+000277r 1               Dbg_Cmd_4_Sys_Info:
+000277r 1                       ; Send the start of the monitor work-RAM. This same address is also sent
+000277r 1                       ; later, for some reason. Not sure if these represent two different things
+000277r 1                       ; which happen to have the same address, but each one seems to be used. If
+000277r 1                       ; this copy is changed to something invalid, the debugger has issues, so it
+000277r 1                       ; seems to be used by the debugger, and not ignored.
+000277r 1  A9 rr                lda     #<__WORK_RAM_LOAD__
+000279r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+00027Cr 1  A9 rr                lda     #>__WORK_RAM_LOAD__
+00027Er 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+000281r 1  A9 rr                lda     #^__WORK_RAM_LOAD__
+000283r 1  20 rr rr             JSR     Sys_VIA_USB_Char_TX
+000286r 1               
+000286r 1                       ; Auto-detected CPU type.
+000286r 1  AD rr rr             lda     RAM_CPU_TYPE
+000289r 1  20 rr rr             JSR     Sys_VIA_USB_Char_TX
+00028Cr 1               
+00028Cr 1                       ; Board ID.
+00028Cr 1  A9 58                lda     #BOARD_ID
+00028Er 1  20 rr rr             JSR     Sys_VIA_USB_Char_TX
+000291r 1               
+000291r 1                       ; Send the work-RAM start address again. Not sure why, but this copy is
+000291r 1                       ; the value that is displayed in the "Target Connection Information"
+000291r 1                       ; screen on the debugger, so this copy is used, and not ignored.
+000291r 1  A9 rr                lda     #<__WORK_RAM_LOAD__
+000293r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+000296r 1  A9 rr                lda     #>__WORK_RAM_LOAD__
+000298r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+00029Br 1  A9 rr                LDA     #^__WORK_RAM_LOAD__
+00029Dr 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002A0r 1               
+0002A0r 1                       ; Send the monitor starting address.
+0002A0r 1  A9 rr                lda     #<__MONITOR_HEADER_LOAD__
+0002A2r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002A5r 1  A9 rr                lda     #>__MONITOR_HEADER_LOAD__
+0002A7r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002AAr 1  A9 rr                lda     #^__MONITOR_HEADER_LOAD__
+0002ACr 1  20 rr rr             JSR     Sys_VIA_USB_Char_TX
+0002AFr 1               
+0002AFr 1                       ; Shadow vector start (24-bit address, LSB-first).
+0002AFr 1  A9 rr                lda     #<__SHADOW_VECTORS_LOAD__
+0002B1r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002B4r 1  A9 rr                LDA     #>__SHADOW_VECTORS_LOAD__
+0002B6r 1  20 rr rr             JSR     Sys_VIA_USB_Char_TX
+0002B9r 1  A9 rr                lda     #^__SHADOW_VECTORS_LOAD__
+0002BBr 1  20 rr rr             JSR     Sys_VIA_USB_Char_TX
+0002BEr 1               
+0002BEr 1                       ; Shadow vector end address + 1.
+0002BEr 1  A9 rr                lda     #<(__SHADOW_VECTORS_LOAD__ + __SHADOW_VECTORS_SIZE__)
+0002C0r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002C3r 1  A9 rr                lda     #>(__SHADOW_VECTORS_LOAD__ + __SHADOW_VECTORS_SIZE__)
+0002C5r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002C8r 1  A9 rr                LDA     #^(__SHADOW_VECTORS_LOAD__ + __SHADOW_VECTORS_SIZE__)
+0002CAr 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002CDr 1               
+0002CDr 1                       ; Send the hardware vector address.
+0002CDr 1  A9 rr                lda     #<__CPU_VECTORS_LOAD__
+0002CFr 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002D2r 1  A9 rr                lda     #>__CPU_VECTORS_LOAD__
+0002D4r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002D7r 1  A9 rr                LDA     #^__CPU_VECTORS_LOAD__
+0002D9r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002DCr 1               
+0002DCr 1                       ; Send the hardware base IO address.
+0002DCr 1  A9 rr                lda     #<__HW_IO_ADDR__
+0002DEr 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002E1r 1  A9 rr                lda     #>__HW_IO_ADDR__
+0002E3r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002E6r 1  A9 rr                LDA     #^__HW_IO_ADDR__
+0002E8r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002EBr 1               
+0002EBr 1                       ; Not sure, but assume this is the last byte of the hardware IO area.
+0002EBr 1  A9 rr                lda     #<(__HW_IO_ADDR__ + __HW_IO_SIZE__ - 1)
+0002EDr 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002F0r 1  A9 rr                lda     #>(__HW_IO_ADDR__ + __HW_IO_SIZE__ - 1)
+0002F2r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002F5r 1  A9 rr                LDA     #^(__HW_IO_ADDR__ + __HW_IO_SIZE__ - 1)
+0002F7r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002FAr 1               
+0002FAr 1                       ; Send the hardware breakpoint address.
+0002FAr 1  A9 rr                lda     #<__HW_BRK_ADDR__
+0002FCr 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+0002FFr 1  A9 rr                lda     #>__HW_BRK_ADDR__
+000301r 1  20 rr rr             jsr     Sys_VIA_USB_Char_TX
+000304r 1  A9 rr                lda     #^__HW_BRK_ADDR__
+000306r 1  4C rr rr             jmp     Sys_VIA_USB_Char_TX
+000309r 1               
+000309r 1               ; Debugger command 5. Restore the CPU context and execute from the saved context.
+000309r 1               Dbg_Cmd_5_Exec:
+000309r 1               
+000309r 1                       ; Restore the user's state of the VIA's PCR register.
+000309r 1  20 rr rr             JSR     Restore_VIA_PCR_State
+00030Cr 1               
+00030Cr 1                       ; Restore the 5 zero-page variables from the copies in work-RAM.
+00030Cr 1  A2 04                LDX     #$04
+00030Er 1               @copy_zp_var:
+00030Er 1  BD rr rr             lda     RAM_ZP_SAVE,x
+000311r 1  9D rr rr             sta     a:DBG_VAR_00,x
+000314r 1  CA                   dex
+000315r 1  10 F7                BPL     @copy_zp_var
+000317r 1               
+000317r 1                       ; See if the CPU was running in emulation mode.
+000317r 1  AD rr rr             lda     RAM_E_SAVE
+00031Ar 1  F0 2D                BEQ     @was_in_native_mode
+00031Cr 1               
+00031Cr 1                       ; The CPU was in emulation mode. Restore the CPU context. Start off
+00031Cr 1                       ; by restoring the stack and the index registers.
+00031Cr 1  AE rr rr             ldx     RAM_SP_SAVE
+00031Fr 1  9A                   txs
+000320r 1  AE rr rr             ldx     RAM_X_SAVE
+000323r 1  AC rr rr             LDY     RAM_Y_SAVE
+000326r 1               
+000326r 1                       ; See what CPU type we're running.
+000326r 1  AD rr rr             lda     RAM_CPU_TYPE
+000329r 1  D0 09                BNE     @cpu_is_65816
+00032Br 1               
+00032Br 1                       ; CPU is 65C02. The below code pushes the saved direct-page contents
+00032Br 1                       ; onto the stack. Not sure why, since in emulation mode, these will
+00032Br 1                       ; always both be 0.
+00032Br 1  AD rr rr             lda     RAM_DP_SAVE+1
+00032Er 1  48                   pha
+00032Fr 1  AD rr rr             lda     RAM_DP_SAVE
+000332r 1  48                   PHA
+000333r 1               
+000333r 1                       ; Pull the direct-page register from the stack. But, since this is
+000333r 1                       ; running on a 65C02, this will actually be a no-op. Seems like the
+000333r 1                       ; stack will have two extra bytes on it (the direct page). Why?!?
+000333r 1  2B                   PLD
+000334r 1               
+000334r 1               @cpu_is_65816:
+000334r 1                       ; Set up a simulated ISR on the stack.
+000334r 1  AD rr rr             LDA     RAM_PC_SAVE+1
+000337r 1  48                   pha
+000338r 1  AD rr rr             lda     RAM_PC_SAVE
+00033Br 1  48                   pha
+00033Cr 1  AD rr rr             lda     RAM_P_SAVE
+00033Fr 1  48                   PHA
+000340r 1               
+000340r 1                       ; We're no longer in the ROM monitor since we're going to execute user code.
+000340r 1  A9 00                lda     #$00
+000342r 1  8D rr rr             STA     RAM_IN_MONITOR
+000345r 1               
+000345r 1                       ; Restore the A register.
+000345r 1  AD rr rr             LDA     RAM_A_SAVE
+000348r 1               
+000348r 1                       ; Perform an RTI, restoring the CPU context as it was.
+000348r 1  40                   rti
+000349r 1               
+000349r 1               @was_in_native_mode:
+000349r 1                       ; Set the CPU to native mode.
+000349r 1  18                   CLC
+00034Ar 1  FB                   XCE
+00034Br 1               
+00034Br 1                       ; Set XY to 16-bit, and A to 8-bit. The assembler is already in 8-bit for A.
+00034Br 1  E2 20                SEP     #$20
+00034Dr 1  C2 10                REP     #$10
+00034Fr 1               .I16
+00034Fr 1               
+00034Fr 1                       ; Restore the 16-bit stack and Direct Page registers.
+00034Fr 1  AE rr rr             ldx     RAM_SP_SAVE
+000352r 1  9A                   txs
+000353r 1  AE rr rr             ldx     RAM_DP_SAVE
+000356r 1  DA                   phx
+000357r 1  2B                   PLD
+000358r 1               
+000358r 1                       ; Set up a simulated ISR on the stack.
+000358r 1  AD rr rr             lda     RAM_PB_SAVE
+00035Br 1  48                   pha
+00035Cr 1  AE rr rr             ldx     RAM_PC_SAVE
+00035Fr 1  DA                   phx
+000360r 1  AD rr rr             lda     RAM_P_SAVE
+000363r 1  48                   pha
+000364r 1  AE rr rr             ldx     RAM_X_SAVE
+000367r 1  AC rr rr             LDY     RAM_Y_SAVE
+00036Ar 1               
+00036Ar 1                       ; We're no longer in the ROM monitor since we're going to execute user code.
+00036Ar 1  A9 00                lda     #$00
+00036Cr 1  8D rr rr             STA     RAM_IN_MONITOR
+00036Fr 1               
+00036Fr 1                       ; Restore the data bank register.
+00036Fr 1  AD rr rr             lda     RAM_DB_SAVE
+000372r 1  48                   pha
+000373r 1  AB                   PLB
+000374r 1               
+000374r 1                       ; Set A to 16-bit mode.
+000374r 1  C2 20                REP     #$20
+000376r 1               .A16
+000376r 1               
+000376r 1                       ; Restore the 16-bit A register.
+000376r 1  AF rr rr rr          LDA     f:RAM_A_SAVE
+00037Ar 1               
+00037Ar 1                       ; Perform an RTI, restoring the CPU context as it was.
+00037Ar 1  40                   RTI
+00037Br 1               
+00037Br 1                       ; This is the end of the subroutine. The CPU will switch to emulation/native,
+00037Br 1                       ; and 8/16 bit A/XY according to E and P stored on the stack, but we need to
+00037Br 1                       ; put the assembler back in 8-bit mode since the following code is always
+00037Br 1                       ; executed in 8-bit mode.
+00037Br 1               .A8
+00037Br 1               .I8
+00037Br 1               
+00037Br 1               ; Debugger commands 6 and 7. They do nothing.
+00037Br 1               Dbg_Cmd_6_No_Op:
+00037Br 1               Dbg_Cmd_7_No_Op:
+00037Br 1               
+00037Br 1                       ; Return, making this debug command a no-op.
+00037Br 1  60                   rts
+00037Cr 1               
+00037Cr 1               ; Debugger command 8. Executes a BRK instruction, causing the monitor to send
+00037Cr 1               ; a $02 to the debugger, as it normally does when a BRK is executed. Not sure why
+00037Cr 1               ; this debugger command exists, or how/if it is useful at all.
+00037Cr 1               Dbg_Cmd_8_BRK:
+00037Cr 1  20 rr rr             jsr     @clear_carry
+00037Fr 1  90 06                BCC     @on_carry_clear
+000381r 1               
+000381r 1                       ; The following code is apparently never executed. See notes below
+000381r 1                       ; regarding an 8-bit immediate LDA and BRK vs. a 16-bit immediate LDA.
+000381r 1  A9 01                LDA     #$01
+000383r 1  00                   BRK     ; Single-byte BRK instruction.
+000384r 1  4C rr rr             jmp     Sys_VIA_USB_Char_TX
+000387r 1               
+000387r 1               @on_carry_clear:
+000387r 1               
+000387r 1                       ; Perform an 8-bit immediate load, and generate a BRK. The BRK in this
+000387r 1                       ; case is only a single byte, instead of two bytes which is typical.
+000387r 1                       ; This could also be interpreted as a 16-bit immediate load of $0000,
+000387r 1                       ; but since the CPU is always in emulation mode when this code is
+000387r 1                       ; executed, it is clearer to write it as an 8-bit load and a BRK.
+000387r 1  A9 00                LDA     #$00
+000389r 1  00                   BRK     ; Single-byte BRK instruction.
+00038Ar 1               
+00038Ar 1                       ; This is not executed because of the BRK above.
+00038Ar 1  4C rr rr             jmp     Sys_VIA_USB_Char_TX
+00038Dr 1               
+00038Dr 1               @clear_carry:
+00038Dr 1  18                   CLC
+00038Er 1               
+00038Er 1               Dbg_Cmd_8_Done:
+00038Er 1  60                   RTS
+00038Fr 1               
+00038Fr 1               ; Debugger command 9. Reads a byte from the debugger, and then executes a BRK
+00038Fr 1               ; instruction, which then sends a $02 to the debugger. Not sure why this
+00038Fr 1               ;debugger command exists, or how/if it is useful at all.
+00038Fr 1               Dbg_Cmd_9_Read_Byte_and_BRK:
+00038Fr 1                       ; Read a data byte from the debugger.
+00038Fr 1  20 rr rr             JSR     Sys_VIA_USB_Char_RX
+000392r 1               
+000392r 1  20 rr rr             jsr     @clear_carry
+000395r 1  90 06                BCC     @on_carry_clear
+000397r 1               
+000397r 1                       ; The following code is apparently never executed. See DBG_CMD_8_BRK
+000397r 1                       ; regarding an 8-bit immediate LDA and BRK vs. a 16-bit immediate LDA.
+000397r 1  A9 01                LDA     #$01
+000399r 1  00                   BRK     ; Single-byte BRK instruction.
+00039Ar 1  4C rr rr             jmp     Sys_VIA_USB_Char_TX
+00039Dr 1               
+00039Dr 1               @on_carry_clear:
+00039Dr 1                       ; The following code is apparently never executed. See DBG_CMD_8_BRK
+00039Dr 1                       ; regarding an 8-bit immediate LDA and BRK vs. a 16-bit immediate LDA.
+00039Dr 1  A9 00                LDA     #$00
+00039Fr 1  00                   BRK     ; Single-byte BRK instruction.
+0003A0r 1               
+0003A0r 1                       ; This is not executed because of the BRK above.
+0003A0r 1  4C rr rr             jmp     Sys_VIA_USB_Char_TX
+0003A3r 1               
+0003A3r 1               @clear_carry:
+0003A3r 1  18                   CLC
+0003A4r 1  60                   rts
+0003A5r 1               
+0003A5r 1               ; The default handler for IRQ when in '02 emulation mode.
+0003A5r 1               ; At this point, we are in emulation mode, so A and XY are in 8-bit mode.
+0003A5r 1               IRQ_02_Entry_Vector_Default:
+0003A5r 1  48                   PHA     ; Save the LSB of A on the stack.
+0003A6r 1               
+0003A6r 1                       ; We're now executing the ROM monitor code.
+0003A6r 1  A9 01                lda     #$01
+0003A8r 1  8F rr rr rr          STA     f:RAM_IN_MONITOR
+0003ACr 1  DA                   PHX     ; Save X on the stack.
+0003ADr 1               
+0003ADr 1                       ; Get the pushed P (status reg). This includes the B flag which
+0003ADr 1                       ; was pushed. We're in '02 mode, so we know the stack is at $100.
+0003ADr 1  BA                   tsx
+0003AEr 1  BD 03 01             lda     $103,x
+0003B1r 1  FA                   PLX
+0003B2r 1               
+0003B2r 1                       ; See if the pushed copy of B is set, indicating a BRK vs IRQ.
+0003B2r 1  29 10                and     #$10
+0003B4r 1  D0 0A                BNE     @on_BRK
+0003B6r 1               
+0003B6r 1                       ; An IRQ was received. Clean up the stack and call the user's
+0003B6r 1                       ; IRQ vector through the shadow vector at $7EFE.
+0003B6r 1  A9 00                lda     #$00
+0003B8r 1  8F rr rr rr          STA     f:RAM_IN_MONITOR        ; No longer in ROM monitor code.
+0003BCr 1               
+0003BCr 1  68                   pla
+0003BDr 1  6C rr rr             jmp     (SHADOW_VEC_IRQ_02)
+0003C0r 1               
+0003C0r 1               ; Called when a BRK instruction is executed.
+0003C0r 1               @on_BRK:
+0003C0r 1                       ; Set RAM_ENTER_MONITOR_REASON to 2, indicating a BRK was executed.
+0003C0r 1  A9 02                LDA     #$02
+0003C2r 1  4C rr rr             jmp     Save_Context_Enter_Monitor_02_Mode
+0003C5r 1               
+0003C5r 1               ; The default handler for NMI when in '02 emulation mode.
+0003C5r 1               NMI_02_Entry_Vector_Default:
+0003C5r 1  48                   PHA     ; Save the LSB of A on the stack.
+0003C6r 1               
+0003C6r 1                       ; See if we were running monitor code or user code.
+0003C6r 1  AF rr rr rr          LDA     f:RAM_IN_MONITOR
+0003CAr 1  D0 0A                BNE     @was_running_monitor_code
+0003CCr 1               
+0003CCr 1                       ; We were running user code, but now we're in the monitor.
+0003CCr 1  A9 01                lda     #$01
+0003CEr 1  8F rr rr rr          STA     f:RAM_IN_MONITOR
+0003D2r 1               
+0003D2r 1                       ; Set RAM_ENTER_MONITOR_REASON to 7, indicating an NMI was generated.
+0003D2r 1  A9 07                lda     #$07
+0003D4r 1  80 02                BRA     Save_Context_Enter_Monitor_02_Mode
+0003D6r 1               
+0003D6r 1               @was_running_monitor_code:
+0003D6r 1                       ; An NMI ocurred while running the monitor code. Ignore it by
+0003D6r 1                       ; restoring the context and returning from the interrupt.
+0003D6r 1  68                   pla
+0003D7r 1  40                   rti
+0003D8r 1               
+0003D8r 1               ; Called while in '02 emulation mode to save the CPU context and
+0003D8r 1               ; then enter the ROM monitor.
+0003D8r 1               ;
+0003D8r 1               ; On entry, A must contain the reason the monitor will be entered.
+0003D8r 1               Save_Context_Enter_Monitor_02_Mode:
+0003D8r 1                       ; Switch to native mode.
+0003D8r 1  18                   CLC
+0003D9r 1  FB                   XCE
+0003DAr 1               
+0003DAr 1                       ; Set XY and A to 8-bit mode. The assembler is already in 8-bit mode.
+0003DAr 1  E2 30                SEP     #$30
+0003DCr 1               
+0003DCr 1                       ; Save the reason we're entering the monitor into work-RAM.
+0003DCr 1  8F rr rr rr          STA     f:RAM_ENTER_MONITOR_REASON
+0003E0r 1               
+0003E0r 1                       ; We were previously in emulation mode, so indicate this.
+0003E0r 1  A9 01                LDA     #$1
+0003E2r 1  8F rr rr rr          STA     f:RAM_E_SAVE
+0003E6r 1               
+0003E6r 1                       ; Save the CPU context and enter the ROM monitor.
+0003E6r 1  4C rr rr             JMP     Save_Context_Enter_Monitor
+0003E9r 1               
+0003E9r 1               ; Unless the user overrides the default vector, then this is called
+0003E9r 1               ; when a BRK instruction is executed while in 816 native mode.
+0003E9r 1               BRK_816_Entry_Vector_Default:
+0003E9r 1                       ; Set the A register to 8-bit mode and push the low part of it.
+0003E9r 1                       ; The assembler is already in 8-bit mode, so no need for .A8.
+0003E9r 1  E2 20                SEP     #$20
+0003EBr 1  48                   PHA
+0003ECr 1               
+0003ECr 1                       ; We're now running monitor code.
+0003ECr 1  A9 01                lda     #$01
+0003EEr 1  8F rr rr rr          STA     f:RAM_IN_MONITOR
+0003F2r 1               
+0003F2r 1                       ; Set RAM_ENTER_MONITOR_REASON to 2, indicating a BRK was executed.
+0003F2r 1  A9 02                lda     #$02
+0003F4r 1  80 15                BRA     Save_Context_Enter_Monitor_816_Mode_With_Reason
+0003F6r 1               
+0003F6r 1               ; Unless the user overrides the default vector, then this is called
+0003F6r 1               ; upon an NMIA while the CPU is in 816 native mode.
+0003F6r 1               NMI_816_Entry_Vector_Default:
+0003F6r 1                       ; Set the A register to 8-bit mode and push the low part of it.
+0003F6r 1                       ; The assembler is already in 8-bit mode, so no need for .A8.
+0003F6r 1  E2 20                SEP     #$20
+0003F8r 1  48                   PHA
+0003F9r 1               
+0003F9r 1                       ; See if we were running monitor code when the NMI ocurred.
+0003F9r 1  AF rr rr rr          LDA     f:RAM_IN_MONITOR
+0003FDr 1  D0 0A                BNE     @was_running_monitor_code
+0003FFr 1               
+0003FFr 1                       ; We're now running monitor code.
+0003FFr 1  A9 01                lda     #$01
+000401r 1  8F rr rr rr          STA     f:RAM_IN_MONITOR
+000405r 1               
+000405r 1                       ; Set RAM_ENTER_MONITOR_REASON to 7, indicating an NMI was generated.
+000405r 1  A9 07                lda     #$07
+000407r 1  80 02                BRA     Save_Context_Enter_Monitor_816_Mode_With_Reason
+000409r 1               
+000409r 1               @was_running_monitor_code:
+000409r 1                       ; An NMI ocurred while running the monitor code. Ignore it by
+000409r 1                       ; restoring the context and returning from the interrupt.
+000409r 1  68                   pla
+00040Ar 1  40                   rti
+00040Br 1               
+00040Br 1               ; Called while in 816 native mode to save the CPU context and
+00040Br 1               ; then enter the ROM monitor.
+00040Br 1               Save_Context_Enter_Monitor_816_Mode_With_Reason:
+00040Br 1  E2 20                SEP     #$20    ; Set the A register to 8-bit mode.
+00040Dr 1                       ; The assembler is already in 8-bit mode, so no need for .A8.
+00040Dr 1               
+00040Dr 1                       ; Save the reason we're entering the monitor into work-RAM.
+00040Dr 1  8F rr rr rr          STA     f:RAM_ENTER_MONITOR_REASON
+000411r 1               
+000411r 1                       ; We were previously in 816 native mode, so indicate this.
+000411r 1  A9 00                lda     #$00
+000413r 1  8F rr rr rr          STA     f:RAM_E_SAVE
+000417r 1               
+000417r 1               ; Saves the CPU context and enters the ROM monitor, syncing with the debugger.
+000417r 1               ; This code is ultimately used by the BRK and NMI handlers in both native and
+000417r 1               ; emulation mode (after switching to native mode).
+000417r 1               ;
+000417r 1               ; Upon entry, the CPU must be in native 816 mode, with A set to 8-bit mode,
+000417r 1               ; with the low 8-bits of A already pushed to the stack.
+000417r 1               Save_Context_Enter_Monitor:
+000417r 1                       ; Save the LSB of A into work-RAM.
+000417r 1  68                   PLA
+000418r 1  8F rr rr rr          STA     f:RAM_A_SAVE
+00041Cr 1               
+00041Cr 1                       ; Save the MSB of A into work-RAM.
+00041Cr 1  EB                   XBA
+00041Dr 1  8F rr rr rr          STA     f:RAM_A_SAVE+1
+000421r 1               
+000421r 1                       ; Save the data bank into work-RAM.
+000421r 1  8B                   PHB
+000422r 1  68                   pla
+000423r 1  8F rr rr rr          STA     f:RAM_DB_SAVE
+000427r 1               
+000427r 1                       ; Switch to data bank 0.
+000427r 1  A9 00                lda     #$00
+000429r 1  48                   pha
+00042Ar 1  AB                   PLB
+00042Br 1               
+00042Br 1                       ; Save 0 into the program bank save area in work-RAM. This value will
+00042Br 1                       ; remain if the CPU was in emulation mode, but it will be overwritten
+00042Br 1                       ; with the correct value later if the CPU was in native mode.
+00042Br 1  8F rr rr rr          STA     f:RAM_PB_SAVE
+00042Fr 1               
+00042Fr 1                       ; Save the CPU status register to the area in work-RAM.
+00042Fr 1  68                   pla
+000430r 1  8F rr rr rr          STA     f:RAM_P_SAVE
+000434r 1               
+000434r 1                       ; Set 16-bit A and XY registers.
+000434r 1  C2 30                REP     #$30
+000436r 1               .I16
+000436r 1               .A16
+000436r 1               
+000436r 1                       ; Save the direct-page register to the save area in work-RAM.
+000436r 1  7B                   TDC
+000437r 1  8F rr rr rr          STA     f:RAM_DP_SAVE
+00043Br 1               
+00043Br 1                       ; Set the direct-page register to page 0. This is a 16-bit load.
+00043Br 1  A9 00 00             lda     #$00
+00043Er 1  5B                   TCD
+00043Fr 1               
+00043Fr 1                       ; Save the X and Y registers (all 16-bits each) to work-RAM.
+00043Fr 1  8E rr rr             stx     RAM_X_SAVE
+000442r 1  8C rr rr             STY     RAM_Y_SAVE
+000445r 1               
+000445r 1                       ; Pull the 16-bit PC and save it to work RAM.
+000445r 1  68                   pla
+000446r 1  8D rr rr             STA     RAM_PC_SAVE
+000449r 1               
+000449r 1                       ; Set A to 8-bit mode.
+000449r 1  E2 20                SEP     #$20
+00044Br 1               .A8
+00044Br 1               
+00044Br 1                       ; See if the CPU was in '02 '816 mode when it was interrupted.
+00044Br 1  AD rr rr             LDA     RAM_E_SAVE
+00044Er 1  D0 04                BNE     @was_in_emulation_mode
+000450r 1               
+000450r 1                       ; The CPU was in native mode. Pull the program bank and save it.
+000450r 1  68                   pla
+000451r 1  8D rr rr             STA     RAM_PB_SAVE
+000454r 1               
+000454r 1               @was_in_emulation_mode:
+000454r 1                       ; Save all 16-bits of the stack pointer. If the CPU was in emulation
+000454r 1                       ; mode, the MSB will be saved as "1".
+000454r 1  BA                   tsx
+000455r 1  8E rr rr             STX     RAM_SP_SAVE
+000458r 1               
+000458r 1                       ; Set 8-bit XY registers. At this point, A and XY are both 8-bit.
+000458r 1  E2 10                SEP     #$10
+00045Ar 1               .I8
+00045Ar 1               
+00045Ar 1                       ; The user's CPU context is now fully saved into work-RAM. Switch
+00045Ar 1                       ; back into emulation mode.
+00045Ar 1  38                   SEC
+00045Br 1  FB                   XCE
+00045Cr 1               
+00045Cr 1               ; Sends the reason the monitor (debugger) was entered, and then syncs
+00045Cr 1               ; with the debugger, allowing the debugger to control the device.
+00045Cr 1               Send_Enter_Reason_and_Sync_With_Debugger:
+00045Cr 1               
+00045Cr 1                       ; Save the state of the system VIA's PCR so it can be restored later.
+00045Cr 1  20 rr rr             JSR     Save_VIA_PCR_State
+00045Fr 1               
+00045Fr 1                       ; Send the reason we entered the monitor to the debugger.
+00045Fr 1  AD rr rr             LDA     RAM_ENTER_MONITOR_REASON
+000462r 1  20 rr rr             JSR     Sys_VIA_USB_Char_TX
+000465r 1               
+000465r 1                       ; Save the first five zero-page values, and sync with debugger.
+000465r 1  4C rr rr             JMP     Save_ZP_Sync_With_Debugger
+000468r 1               
+000468r 1               ; Called in emulation mode upon system reset.
+000468r 1               ; Initializes the system VIA (the USB debugger), and syncs with the USB chip.
+000468r 1               Initialize_System_VIA:
+000468r 1               
+000468r 1                       ; Disable PB7, shift register, timer T1 interrupt.
+000468r 1  A9 00                lda     #$00
+00046Ar 1  8D rr rr             STA     SYSTEM_VIA_ACR
+00046Dr 1               
+00046Dr 1                       ; Cx1/Cx2 as inputs with negative active edge, for both ports. These
+00046Dr 1                       ; aren't used for the system VIA debugging interface, but the Cx2
+00046Dr 1                       ; lines are connected to the FLASH, and they select the bank. Setting
+00046Dr 1                       ; them as inputs allows the pullups to automatically select the bank
+00046Dr 1                       ; which contains the factory-programmed FLASH bank with the monitor.
+00046Dr 1  A9 00                lda     #$00
+00046Fr 1  8D rr rr             STA     SYSTEM_VIA_PCR
+000472r 1               
+000472r 1                       ; Save the PCR in work-RAM so it can be restored later.
+000472r 1  8D rr rr             STA     RAM_PCR_SAVE
+000475r 1               
+000475r 1                       ; Preset port B output for $18 (TUSB_RDB and PB4-not-connected high).
+000475r 1  A9 18                lda     #$18
+000477r 1  8D rr rr             STA     SYSTEM_VIA_IOB
+00047Ar 1               
+00047Ar 1                       ; Set PB2 (TUSB_WR), PB3 (TUSB_RDB), and PB4 (N.C.) as outputs. This
+00047Ar 1                       ; has the effect of writing $FF to the USB FIFO when the RESET button
+00047Ar 1                       ; is pressed. When RESET is pressed, it causes the system VIA to output
+00047Ar 1                       ; high on TUSB_WR, then when this write sets TUSB_WR low, the high-to-
+00047Ar 1                       ; low transition on TUSB_WR triggers a write to the USB FIFO. At this
+00047Ar 1                       ; point, port A (the USB FIFO data lines) are not being driven, and
+00047Ar 1                       ; either float high, or are pulled high internally, because this
+00047Ar 1                       ; triggers a write of $FF to the USB FIFO.
+00047Ar 1  A9 1C                lda     #$1C
+00047Cr 1  8D rr rr             STA     SYSTEM_VIA_DDRB
+00047Fr 1               
+00047Fr 1                       ; Set all IO on port A to inputs.
+00047Fr 1  A9 00                LDA     #$00
+000481r 1  8D rr rr             STA     SYSTEM_VIA_DDRA
+000484r 1               
+000484r 1                       ; Read port B (USB status and control lines) and save it on the stack.
+000484r 1  AD rr rr             lda     SYSTEM_VIA_IOB
+000487r 1  48                   PHA
+000488r 1               
+000488r 1                       ; Mask out bit 4, which is not connected.
+000488r 1  29 EF                AND     #$EF
+00048Ar 1               
+00048Ar 1                       ; Write the result back. Not sure why since only bit 4 changes, and
+00048Ar 1                       ; it is not connected (according to schematic rev. C, Dec. 15, 2020).
+00048Ar 1  8D rr rr             STA     SYSTEM_VIA_IOB
+00048Dr 1               
+00048Dr 1                       ; Delay for $5D*256 loop cycles.
+00048Dr 1  A2 5D                LDX     #$5D
+00048Fr 1  20 rr rr             JSR     Delay_Loop
+000492r 1               
+000492r 1                       ; Pull the original port B value, and write it back to the port.
+000492r 1  68                   PLA
+000493r 1  8D rr rr             STA     SYSTEM_VIA_IOB
+000496r 1               
+000496r 1                       ; Wait until PB5 (TUSB_PWRENB) goes low, indicating it's powered up.
+000496r 1  A9 20                lda     #$20
+000498r 1  2C rr rr     @loop:  bit     SYSTEM_VIA_IOB
+00049Br 1  D0 FB                BNE     @loop
+00049Dr 1               
+00049Dr 1                       ; If PB6 (not connected) is 0, then make a no-op call. Why?!?
+00049Dr 1  AD rr rr             LDA     SYSTEM_VIA_IOB
+0004A0r 1  29 40                and     #$40
+0004A2r 1  F0 65                BEQ     Do_Nothing_Subroutine
+0004A4r 1               
+0004A4r 1                       ; All done.
+0004A4r 1  60                   RTS
+0004A5r 1               
+0004A5r 1               ; Returns 1 in A if there is data available to be read, 0 if not.
+0004A5r 1               Is_VIA_USB_RX_Data_Avail:
+0004A5r 1               
+0004A5r 1                       ; Set all bits on port A to inputs.
+0004A5r 1  A9 00                LDA     #$00
+0004A7r 1  8D rr rr             STA     SYSTEM_VIA_DDRA
+0004AAr 1               
+0004AAr 1                       ; See if PB1 (TUSB_RXFB) is high.
+0004AAr 1  A9 02                LDA     #$02
+0004ACr 1  2C rr rr             bit     SYSTEM_VIA_IOB
+0004AFr 1  D0 03                bne     @not_zero
+0004B1r 1               
+0004B1r 1                       ; It is low, meaning there is data available to read.
+0004B1r 1  A9 01                LDA     #$01
+0004B3r 1  60                   RTS
+0004B4r 1               
+0004B4r 1               @not_zero:
+0004B4r 1                       ; It is high, meaning there is no data available to read.
+0004B4r 1  A9 00                LDA     #$00
+0004B6r 1  60                   RTS
+0004B7r 1               
+0004B7r 1               ; Waits for a byte to be ready on the USB FIFO and then reads it, returning
+0004B7r 1               ; the value read in the A register.
+0004B7r 1               Sys_VIA_USB_Char_RX:
+0004B7r 1                       ; Set all bits on port A to inputs.
+0004B7r 1  A9 00                lda     #$00
+0004B9r 1  8D rr rr             STA     SYSTEM_VIA_DDRA
+0004BCr 1               
+0004BCr 1                       ; Set up to test PB1 (TUSB_RXFB).
+0004BCr 1  A9 02                LDA     #$02
+0004BEr 1               
+0004BEr 1                       ; Wait for PB1 (TUSB_RXFB) to be low. This indicates data can be
+0004BEr 1                       ; read from the FIFO by strobing PB3 low then high again.
+0004BEr 1               @wait_for_rxfb_low:
+0004BEr 1  2C rr rr             bit     SYSTEM_VIA_IOB
+0004C1r 1  D0 FB                BNE     @wait_for_rxfb_low
+0004C3r 1               
+0004C3r 1                       ; Perform a read-modify-write on port B, clearing PB3 (TUSB_RDB).
+0004C3r 1                       ; This triggers the FIFO to drive the received byte on port A.
+0004C3r 1  AD rr rr             lda     SYSTEM_VIA_IOB
+0004C6r 1  09 08                ora     #$08    ; Save a copy of port B with PB3 set high.
+0004C8r 1  AA                   tax     ; This will be used later.
+0004C9r 1  29 F7                and     #$F7
+0004CBr 1  8D rr rr             STA     SYSTEM_VIA_IOB
+0004CEr 1               
+0004CEr 1                       ; Wait for the FIFO to drive the data and the lines to settle
+0004CEr 1                       ; (between 20ns and 50ns, according to the datasheet).
+0004CEr 1  EA                   nop
+0004CFr 1  EA                   nop
+0004D0r 1  EA                   nop
+0004D1r 1  EA                   NOP
+0004D2r 1               
+0004D2r 1                       ; Read the data byte from the FIFO on port A.
+0004D2r 1  AD rr rr             LDA     SYSTEM_VIA_IOA
+0004D5r 1               
+0004D5r 1                       ; Restore the original value of port B, while setting PB3 high again.
+0004D5r 1  8E rr rr             stx     SYSTEM_VIA_IOB
+0004D8r 1               
+0004D8r 1                       ; We're done. The byte read is in A.
+0004D8r 1  60                   RTS
+0004D9r 1               
+0004D9r 1                       ; Apparently unused code.
+0004D9r 1  A9 EE                lda     #$EE
+0004DBr 1  60                   rts
+0004DCr 1               
+0004DCr 1               ; Sends the byte stored in A to the debugger, waiting until it can be sent.
+0004DCr 1               Sys_VIA_USB_Char_TX:
+0004DCr 1               
+0004DCr 1                       ; Set all bits on port A to inputs.
+0004DCr 1  A2 00                ldx     #$00
+0004DEr 1  8E rr rr             STX     SYSTEM_VIA_DDRA
+0004E1r 1               
+0004E1r 1                       ; Write register A to port A. This has no effect on the actual
+0004E1r 1                       ; output pin until port A is set as an output.
+0004E1r 1  8D rr rr             STA     SYSTEM_VIA_IOA
+0004E4r 1               
+0004E4r 1                       ; Set up register A to test port B, bit 0 (TUSB_TXEB).
+0004E4r 1  A9 01                LDA     #$01
+0004E6r 1               
+0004E6r 1                       ; Wait for PB0 (TUSB_TXEB) to be low. This indicates data can be
+0004E6r 1                       ; written to the FIFO by strobing PB2 (TUSB_WR) high then low.
+0004E6r 1               @wait_for_txeb_low:
+0004E6r 1  2C rr rr             bit     SYSTEM_VIA_IOB
+0004E9r 1  D0 FB                BNE     @wait_for_txeb_low
+0004EBr 1               
+0004EBr 1                       ; Perform a read-modify-write on port B, setting bit 2 (TUSB_WR).
+0004EBr 1                       ; Save the original value in X temporarily.
+0004EBr 1  AD rr rr             lda     SYSTEM_VIA_IOB
+0004EEr 1  29 FB                AND     #$FB	; Save a copy of port B with PB2 low.
+0004F0r 1  AA                   TAX
+0004F1r 1  09 04                ora     #$04	; Set PB2 high.
+0004F3r 1  8D rr rr             STA     SYSTEM_VIA_IOB
+0004F6r 1               
+0004F6r 1                       ; Set all bits on port A to outputs. This causes the pin outputs
+0004F6r 1                       ; to be set to what we wrote to port A earlier in the subroutine.
+0004F6r 1  A9 FF                lda     #$FF
+0004F8r 1  8D rr rr             STA     SYSTEM_VIA_DDRA
+0004FBr 1               
+0004FBr 1                       ; Wait for the port A outputs to settle. The datasheet says this
+0004FBr 1                       ; must be held at least 20 ns before PB2 (TUSB_WR) is brought low.
+0004FBr 1  EA                   NOP
+0004FCr 1  EA                   NOP
+0004FDr 1               
+0004FDr 1                       ; Write the original port B value back, setting PB2 back to low.
+0004FDr 1  8E rr rr             STX     SYSTEM_VIA_IOB
+000500r 1               
+000500r 1                       ; Read port A. But why? The values read should be the actual
+000500r 1                       ; values driven on the pins, which may not be what we commanded
+000500r 1                       ; them to if, for example, they are heavily loaded. This value
+000500r 1                       ; is returned in the A register, and could be examined by the
+000500r 1                       ; caller. But this is not used anywhere in the monitor.
+000500r 1  AD rr rr             LDA     SYSTEM_VIA_IOA
+000503r 1               
+000503r 1                       ; Set all bits in port A as inputs.
+000503r 1  A2 00                ldx     #$00
+000505r 1  8E rr rr             STX     SYSTEM_VIA_DDRA
+000508r 1               
+000508r 1                       ; All done.
+000508r 1  60                   rts
+000509r 1               
+000509r 1               ; A subroutine which does absolutely nothing.
+000509r 1               Do_Nothing_Subroutine:
+000509r 1  60                   rts
+00050Ar 1               
+00050Ar 1               ; Delays by looping 256*X times.
+00050Ar 1               Delay_Loop:
+00050Ar 1  DA                   phx
+00050Br 1  A2 00                ldx     #$00
+00050Dr 1               @loop_256_times:
+00050Dr 1  CA                   dex
+00050Er 1  D0 FD                bne     @loop_256_times
+000510r 1  FA                   plx
+000511r 1  CA                   dex
+000512r 1  D0 F6                bne     Delay_Loop
+000514r 1  60                   rts
+000515r 1               
+000515r 1               ; Saves the current VIA PCR state into work-RAM. This is done after running
+000515r 1               ; user code, and before modifying PCR once returning to the monitor. This is
+000515r 1               ; necessary in case the user modifies PCR, for example, to control the active
+000515r 1               ; banks on the FLASH.
+000515r 1               Save_VIA_PCR_State:
+000515r 1  AD rr rr             lda     SYSTEM_VIA_PCR
+000518r 1  8D rr rr             sta     RAM_PCR_SAVE
+00051Br 1  60                   rts
+00051Cr 1               
+00051Cr 1               ; Restores the state of the system VIA's PCR register to what it was when
+00051Cr 1               ; the monitor interrupted the user's code.
+00051Cr 1               Restore_VIA_PCR_State:
+00051Cr 1  AD rr rr             lda     RAM_PCR_SAVE
+00051Fr 1  8D rr rr             sta     SYSTEM_VIA_PCR
+000522r 1  60                   rts
+000523r 1               
+000523r 1                       .segment "CPU_VECTORS"
+000000r 1               
+000000r 1                       ; 65816 Native-Mode Vectors
+000000r 1  rr rr        COP_816:    .addr   COP_816_entry       ; $FFE4
+000002r 1  rr rr        BRK_816:    .addr   BRK_816_entry       ; $FFE6
+000004r 1  rr rr        ABORT_816:  .addr   ABORT_816_entry     ; $FFE8
+000006r 1  rr rr        NMI_816:    .addr   NMI_816_entry       ; $FFEA
+000008r 1  rr rr        RSVD_FFEC:  .addr   Infinite_Loop       ; $FFEC
+00000Ar 1  rr rr        IRQ_816:    .addr   IRQ_816_entry       ; $FFEE
+00000Cr 1               
+00000Cr 1                       ; 65C02 Emulation-Mode Vectors
+00000Cr 1  rr rr        RSVD_FFF0:  .addr   Infinite_Loop       ; $FFF0
+00000Er 1  rr rr        RSVD_FFF2:  .addr   Infinite_Loop       ; $FFF2
+000010r 1  rr rr        COP_02:     .addr   COP_02_entry        ; $FFF4
+000012r 1  rr rr        RSVD_FFF6:  .addr   Infinite_Loop       ; $FFF6
+000014r 1  rr rr        ABORT_02:   .addr   ABORT_02_entry      ; $FFF8
+000016r 1  rr rr        NMI_02:     .addr   NMI_02_entry        ; $FFFA
+000018r 1  rr rr        RESET:      .addr   RESET_entry         ; $FFFC
+00001Ar 1  rr rr        IRQ_02:     .addr   IRQ_02_entry        ; $FFFE
+00001Ar 1               
