@@ -50,7 +50,9 @@ A small example of an auto-executed user application is included, based on the X
 # Erasing the User Application
 Once an application is set to auto-execute, the custom ROM monitor will always execute it, so to erase the application, you must boot back into the original factory ROM monitor. This is done by removing the jumper wire from ground to `FAMS`, and then resetting the board. Once booted back into the original ROM monitor, you can load `w65c816sxb-hacker` and use it to erase flash bank 1, obliterating the custom ROM image and the user application.
 
-# Future Enhancements
-It would be nice if `w65c816sxb-hacker` allowed you to erase a range of flash addresses, instead of the entire flash bank. Then you could just erase the user application, without erasing the custom ROM image. 
+If using the original version of `w65c816sxb-hacker`, you must erase the entire flash bank 1, which erases both the user application and the custom ROM image.
 
-It would also be nice if the custom ROM monitor looked for some input to determine whether to automatically execute the user's application. For example, maybe one of the GPIOs on the PIA.
+There is an enhanced version of `w65c816sxb-hacker` which allows erasing specified regions in the flash bank. For example, to erase only the user application, you can use the `.E 8000 EFFF` command. The enhanced version is located here: https://github.com/timali/W65C816SXB-Hacker
+
+# Future Enhancements
+It would be nice if the custom ROM monitor looked for some input to determine whether to automatically execute the user's application. For example, maybe one of the GPIOs on the PIA.
