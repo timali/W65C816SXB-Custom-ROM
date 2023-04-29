@@ -12,8 +12,8 @@ W65c816SXB-Custom-ROM.o:
     SHADOW_VECTORS    Offs=000000  Size=00001C  Align=00001  Fill=0000
     VIA_USB           Offs=000000  Size=000000  Align=00001  Fill=0000
     MONITOR_HEADER    Offs=000000  Size=000035  Align=00001  Fill=0000
-    POINTER_TABLE     Offs=000000  Size=000018  Align=00001  Fill=0000
-    MON_CODE          Offs=000000  Size=000523  Align=00001  Fill=0000
+    POINTER_TABLE     Offs=000000  Size=00001A  Align=00001  Fill=0000
+    MON_CODE          Offs=000000  Size=000527  Align=00001  Fill=0000
     CPU_VECTORS       Offs=000000  Size=00001C  Align=00001  Fill=0000
 
 
@@ -32,8 +32,8 @@ WORK_RAM              007EC0  007EDA  00001B  00001
 RAW_VECTORS           007EDC  007EE3  000008  00001
 SHADOW_VECTORS        007EE4  007EFF  00001C  00001
 MONITOR_HEADER        00F000  00F034  000035  00001
-POINTER_TABLE         00F080  00F097  000018  00001
-MON_CODE              00F100  00F622  000523  00001
+POINTER_TABLE         00F080  00F099  00001A  00001
+MON_CODE              00F100  00F626  000527  00001
 CPU_VECTORS           00FFE4  00FFFF  00001C  00001
 
 
@@ -128,35 +128,35 @@ SHADOW_VEC_IRQ_02 (W65c816SXB-Custom-ROM.o):
 SHADOW_VEC_IRQ_816 (W65c816SXB-Custom-ROM.o):
 __ACIA_ADDR__ ([linker generated]):
 __CPU_VECTORS_LOAD__ ([linker generated]):
-    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:54
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:56
 __CPU_VECTORS_RUN__ ([linker generated]):
 __CPU_VECTORS_SIZE__ ([linker generated]):
 __HW_BRK_ADDR__ ([linker generated]):
-    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:48
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:50
 __HW_IO_ADDR__ ([linker generated]):
-    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:45
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:47
 __HW_IO_SIZE__ ([linker generated]):
-    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:46
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:48
 __MONITOR_HEADER_LOAD__ ([linker generated]):
-    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:53
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:55
 __MONITOR_HEADER_RUN__ ([linker generated]):
 __MONITOR_HEADER_SIZE__ ([linker generated]):
 __PIA_AADR__ ([linker generated]):
 __SHADOW_VECTORS_LOAD__ ([linker generated]):
-    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:50
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:52
 __SHADOW_VECTORS_RUN__ ([linker generated]):
 __SHADOW_VECTORS_SIZE__ ([linker generated]):
-    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:51
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:53
 __USR_ROM_FILEOFFS__ ([linker generated]):
 __USR_ROM_LAST__ ([linker generated]):
 __USR_ROM_SIZE__ ([linker generated]):
 __USR_ROM_START__ ([linker generated]):
-    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:52
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:54
 __VIA_USB_ADDR__ ([linker generated]):
-    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:47
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:49
 __VIA_USR_ADDR__ ([linker generated]):
 __WORK_RAM_LOAD__ ([linker generated]):
-    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:49
+    W65c816SXB-Custom-ROM.o   W65c816SXB-Custom-ROM.s:51
 __WORK_RAM_RUN__ ([linker generated]):
 __WORK_RAM_SIZE__ ([linker generated]):
 __XCS0_ADDR__ ([linker generated]):

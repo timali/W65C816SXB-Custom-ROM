@@ -7,6 +7,8 @@
 ;       2) Reduce RAM usage.
 ;       3) Eliminate dead code in the monitor.
 ;       4) Support automatically executing a user's image in FLASH.
+;       5) Allow automatic code execution without requiring the USB
+;          debugger port be enumerated (allows for power-only).
 ;
 ; If the first three bytes of the user's application area in flash,
 ; $8000-$8002, are "WDC", then the user's application is automatically
@@ -215,7 +217,7 @@ Signature_String:
         .byte   $82,"$",$01,$FF
 
 Monitor_Version_String:
-        .asciiz   "WDC65c816SXB Custom ROM, v1.0, ts=", .sprintf("%d", .time)
+        .asciiz   "WDC65c816SXB Custom ROM, v1.1, ts=", .sprintf("%d", .time)
 
         .segment "POINTER_TABLE"
 
@@ -238,6 +240,7 @@ Pointer_Table:
         .addr   NMI_02_Entry_Vector_Default
         .addr   BRK_816_Entry_Vector_Default
         .addr   NMI_816_Entry_Vector_Default
+        .addr   Wait_For_USB_FIFO_Ready
 
         ; This is the start of the actual monitor code.
         .segment "MON_CODE"
@@ -299,6 +302,9 @@ RESET_entry:
 
         ; Execute the user's application if the signature is present.
         jsr     Check_AutoExec_Usr_App
+
+        ; If there is no user application, wait for the USB FIFO to be ready.
+        jsr     Wait_For_USB_FIFO_Ready
 
         ; Save a copy of ZP memory, and sync up with the debugger.
         jmp     Save_ZP_Sync_With_Debugger
@@ -1364,8 +1370,9 @@ Send_Enter_Reason_and_Sync_With_Debugger:
         ; Save the first five zero-page values, and sync with debugger.
         JMP     Save_ZP_Sync_With_Debugger
 
-; Called in emulation mode upon system reset.
-; Initializes the system VIA (the USB debugger), and syncs with the USB chip.
+; Called in emulation mode upon system reset. Could also be called through
+; the data pointer table through a call to Initialize_System. Initializes
+; the system VIA (the USB debugger), and syncs with the USB chip.
 Initialize_System_VIA:
 
         ; Disable PB7, shift register, timer T1 interrupt.
@@ -1421,17 +1428,43 @@ Initialize_System_VIA:
         PLA
         STA     SYSTEM_VIA_IOB
 
-        ; Wait until PB5 (TUSB_PWRENB) goes low, indicating it's powered up.
-        lda     #$20
-@loop:  bit     SYSTEM_VIA_IOB
-        BNE     @loop
-
         ; If PB6 (not connected) is 0, then make a no-op call. Why?!?
         LDA     SYSTEM_VIA_IOB
         and     #$40
         BEQ     Do_Nothing_Subroutine
 
         ; All done.
+        RTS
+
+; Waits until the PWREN# line on the USB FIFO chip goes low, which is when
+; the host PC queries and configures the USB chip. This does not happen if
+; the board is powered via USB with no data connection to the host.
+;
+; The original monitor code always performed this step at the end of the
+; Initialize_System_VIA function. Thus, the monitor code would hang forever
+; here unless the USB port was connected to a PC. This was fine because the
+; original monitor code was designed only for use with the PC being a debugger,
+; so it was fine to wait until the USB FIFO data interface was ready before
+; continuing with the monitor initialization.
+;
+; The customized monitor ROM allows automatic code execution, so we want that
+; code to be executed even if the board is not connected to a PC via USB. This
+; allows the board to be powered via USB with no data connection, or from a
+; simple 5V supply.
+;
+; Therefore, the customized ROM no longer calls Wait_For_USB_FIFO_Ready before
+; starting the user's application. If the user's application wishes to use the
+; USB FIFO, then it should call Wait_For_USB_FIFO_Ready before it wants to use
+; the USB FIFO. It can do this by making a call through Pointer_Table.
+;
+; If there is no user application, then Wait_For_USB_FIFO_Ready
+; is called, to ensure the USB FIFO interface is ready for use for debugging.
+Wait_For_USB_FIFO_Ready:
+        ; Wait until PB5 (TUSB_PWRENB) goes low, indicating it's powered up.
+        lda     #$20
+@loop:  bit     SYSTEM_VIA_IOB
+        BNE     @loop
+
         RTS
 
 ; Returns 1 in A if there is data available to be read, 0 if not.
